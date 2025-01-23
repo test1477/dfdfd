@@ -1,153 +1,237 @@
-To configure **RBAC role assignments for customer SPNs** using a base Terraform template with GitHub Actions, you can skip CI/CD-level dynamic variable injection since you'll use `.tfvars` for inputs. Here's the **step-by-step guide**:
+To incorporate **RBAC role assignment for the customer SPN** into the Landing Zone while leveraging the existing `role_assignment` module, you need to ensure that the `main.tf`, `variables.tf`, and `terraform.tfvars` files in the Landing Zone repository are correctly configured to pass the necessary values dynamically. Here's the step-by-step guide:
 
 ---
 
-### **Step 1: Define Variables for Role Assignments**
-In your **`variables.tf`** file, define a variable to manage role assignments dynamically:
+### **1. Define Variables in `variables.tf`**
+
+Add input variables to the Landing Zone's `variables.tf` file to allow dynamic configuration of RBAC role assignments.
 
 ```hcl
-variable "app_apprg_role_assignments" {
-  description = "List of role assignments for customer SPNs"
+variable "customer_spn_rbac_list" {
+  description = "List of RBAC role assignments for the customer SPN"
   type = list(object({
-    spn_object_id   = string
-    role_definition = string
-    scope           = string
+    group_name       = string  # Key to map the SPN or group
+    role_definition  = string  # Role to assign
+    scope            = string  # Scope for the role assignment
   }))
+  default = []
+}
+
+variable "customer_spn_object_id" {
+  description = "The object ID of the customer SPN"
+  type        = string
 }
 ```
 
 ---
 
-### **Step 2: Implement Role Assignments in `main.tf`**
-Add the following logic in your `main.tf` file to assign roles to the customer SPNs dynamically:
+### **2. Update `main.tf` to Use the `role_assignment` Module**
+
+Add the `role_assignment` module call in your Landing Zone's `main.tf` file to process the roles dynamically:
 
 ```hcl
-resource "azurerm_role_assignment" "app_apprg_roles" {
-  for_each = { for idx, role_assignment in var.app_apprg_role_assignments : idx => role_assignment }
+module "role_assignment" {
+  source = "github.com/Eaton-Vance-Corp/terraform-azure-role_assignment?ref=init"
 
-  scope                = each.value.scope
-  role_definition_name = each.value.role_definition
-  principal_id         = each.value.spn_object_id
+  res_rbac_info = [
+    for rbac in var.customer_spn_rbac_list : {
+      principal_id                     = var.customer_spn_object_id
+      role_definition_type             = "name"
+      role_definition                  = rbac.role_definition
+      scope                            = rbac.scope
+      skip_service_principal_aad_check = false
+    }
+  ]
 }
 ```
 
 ---
 
-### **Step 3: Prepare `terraform.tfvars`**
-Use the **`terraform.tfvars`** file to define the SPNs, their roles, and scopes.
+### **3. Pass Values Dynamically in `terraform.tfvars`**
+
+The `terraform.tfvars` file should provide the specific RBAC role assignments for the customer SPN. Example:
 
 ```hcl
-app_apprg_role_assignments = [
+customer_spn_object_id = "spn-object-id"
+
+customer_spn_rbac_list = [
   {
-    spn_object_id   = "spn-object-id-1"
+    group_name      = "group1"
     role_definition = "Website Contributor"
-    scope           = "/subscriptions/<subscription-id>/resourceGroups/app-rg"
+    scope           = "/subscriptions/<subscription-id>/resourceGroups/rg-name"
   },
   {
-    spn_object_id   = "spn-object-id-2"
+    group_name      = "group2"
     role_definition = "Key Vault Administrator"
-    scope           = "/subscriptions/<subscription-id>/resourceGroups/app-rg/providers/Microsoft.KeyVault/vaults/my-keyvault"
+    scope           = "/subscriptions/<subscription-id>/resourceGroups/rg-name/providers/Microsoft.KeyVault/vaults/keyvault-name"
   },
   {
-    spn_object_id   = "spn-object-id-3"
+    group_name      = "group3"
     role_definition = "API Management Service Contributor"
-    scope           = "/subscriptions/<subscription-id>/resourceGroups/app-rg/providers/Microsoft.ApiManagement/service/my-apim"
+    scope           = "/subscriptions/<subscription-id>/resourceGroups/rg-name/providers/Microsoft.ApiManagement/service/apim-name"
   }
 ]
 ```
 
 ---
 
-### **Step 4: Configure GitHub Actions Workflow**
-Define a GitHub Actions workflow to automate the application of Terraform code.
+### **4. Ensure Correct Integration with Other Modules**
 
-#### **Sample GitHub Actions Workflow (`.github/workflows/terraform.yml`):**
+If you need to apply RBAC at specific modules (e.g., `akv`, `sql`, etc.), pass the `customer_spn_object_id` and the relevant role assignments (`customer_spn_rbac_list`) for those modules dynamically.
 
-```yaml
-name: Terraform Deployment
+For example, for the **Key Vault (AKV)** module:
+```hcl
+module "akv" {
+  source       = "github.com/cloud-era/terraform-azure-component-akv?ref=init"
+  depends_on   = [module.landing_zone]
 
-on:
-  push:
-    branches:
-      - main
+  system_rg_name  = module.landing_zone.mod_out_resource_group_names
+  app_rg_name     = module.landing_zone.mod_out_app_resource_group_names
+  location        = local.location
+  env             = var.env_name
+  keyvault_name   = var.keyvault_name
 
-jobs:
-  terraform:
-    runs-on: ubuntu-latest
+  spn_rbac = {
+    spn_object_ids = [var.customer_spn_object_id]
+  }
 
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v2
-      with:
-        terraform_wrapper: false
-
-    - name: Initialize Terraform
-      run: terraform init
-
-    - name: Validate Terraform
-      run: terraform validate
-
-    - name: Plan Terraform Changes
-      run: terraform plan -var-file="terraform.tfvars"
-
-    - name: Apply Terraform Changes
-      run: terraform apply -auto-approve -var-file="terraform.tfvars"
+  privateendpoint_subnetid = module.subnets.mod_out_subnet_ids[1]
+}
 ```
 
 ---
 
-### **Step 5: Assign Required Permissions to Master SPN**
-The **Master Landing Zone SPN** must have sufficient permissions to assign roles to customer SPNs.
+### **5. Adjust Dependencies if Needed**
 
-#### **Permissions Required**:
-1. **`User Access Administrator` Role**:
-   - Required for managing role assignments (RBAC) in Azure.
-   - Assign this role at the **scope** where the role assignments will be created (e.g., subscription or resource group level).
+If role assignments depend on the creation of specific resources (e.g., resource groups or subnets), ensure you add `depends_on` in the `role_assignment` module:
 
-2. **`Owner` Role** (optional):
-   - If you prefer not to assign `User Access Administrator`, the `Owner` role can also perform role assignments but includes additional permissions that might not be necessary.
+```hcl
+module "role_assignment" {
+  source = "github.com/Eaton-Vance-Corp/terraform-azure-role_assignment?ref=init"
 
----
+  depends_on = [module.landing_zone, module.subnets]
 
-### **Step 6: Test with a Sample Use Case**
-1. Update the **`terraform.tfvars`** file with a sample role assignment for a customer SPN.
-2. Push changes to the GitHub repository to trigger the GitHub Actions workflow.
-3. Verify that:
-   - The role assignments are created successfully.
-   - The SPNs have access to the specified scopes with the assigned roles.
-
----
-
-### **Folder Structure**
-
-Ensure the repository structure is clear and modular for reusability:
-
-```
-/.github/workflows/terraform.yml         # GitHub Actions workflow
-/main.tf                                 # Main Terraform configuration
-/variables.tf                            # Input variables
-/terraform.tfvars                        # Role assignments input
-/modules/role_assignment/                # Optional module for role assignment
+  res_rbac_info = [
+    for rbac in var.customer_spn_rbac_list : {
+      principal_id                     = var.customer_spn_object_id
+      role_definition_type             = "name"
+      role_definition                  = rbac.role_definition
+      scope                            = rbac.scope
+      skip_service_principal_aad_check = false
+    }
+  ]
+}
 ```
 
 ---
 
-### **Summary of Steps**
+### **6. Example Full Files**
 
-1. **Define variables** for role assignments in `variables.tf`.
-2. **Implement logic** for dynamic role assignments in `main.tf`.
-3. Use **`terraform.tfvars`** to define the customer SPNs, roles, and scopes.
-4. Create a **GitHub Actions workflow** to automate Terraform deployment.
-5. Assign **`User Access Administrator`** or equivalent permissions to the master SPN.
-6. Test the workflow with a sample `terraform.tfvars`.
+#### **`variables.tf`**
+```hcl
+variable "eonid" {
+  description = "The EON ID for the deployment"
+  type        = string
+}
+
+variable "location" {
+  description = "Azure region for resources"
+  type        = string
+}
+
+variable "customer_spn_object_id" {
+  description = "The object ID of the customer SPN"
+  type        = string
+}
+
+variable "customer_spn_rbac_list" {
+  description = "List of RBAC role assignments for the customer SPN"
+  type = list(object({
+    group_name       = string
+    role_definition  = string
+    scope            = string
+  }))
+  default = []
+}
+```
+
+#### **`main.tf`**
+```hcl
+module "landing_zone" {
+  source = "github.com/cloud-era/terrafora-azure-component-landing-zone?ref=init"
+
+  eonid               = var.eonid
+  location            = var.location
+  lz_name             = var.lz_name
+  short_name          = var.short_name
+  short_env           = var.short_env
+  env                 = var.env_name
+  vnet_address_prefix = var.vnet_address_prefix
+
+  tags = local.core_tagging
+}
+
+module "role_assignment" {
+  source = "github.com/Eaton-Vance-Corp/terraform-azure-role_assignment?ref=init"
+
+  res_rbac_info = [
+    for rbac in var.customer_spn_rbac_list : {
+      principal_id                     = var.customer_spn_object_id
+      role_definition_type             = "name"
+      role_definition                  = rbac.role_definition
+      scope                            = rbac.scope
+      skip_service_principal_aad_check = false
+    }
+  ]
+}
+```
+
+#### **`terraform.tfvars`**
+```hcl
+eonid = "123456"
+location = "eastus"
+
+customer_spn_object_id = "spn-object-id"
+
+customer_spn_rbac_list = [
+  {
+    group_name      = "group1"
+    role_definition = "Website Contributor"
+    scope           = "/subscriptions/<subscription-id>/resourceGroups/rg-name"
+  },
+  {
+    group_name      = "group2"
+    role_definition = "Key Vault Administrator"
+    scope           = "/subscriptions/<subscription-id>/resourceGroups/rg-name/providers/Microsoft.KeyVault/vaults/keyvault-name"
+  },
+  {
+    group_name      = "group3"
+    role_definition = "API Management Service Contributor"
+    scope           = "/subscriptions/<subscription-id>/resourceGroups/rg-name/providers/Microsoft.ApiManagement/service/apim-name"
+  }
+]
+```
 
 ---
 
-Let me know if you need help configuring specific scopes or debugging your GitHub Actions workflow!
+### **7. Testing and Validation**
+
+1. **Run Terraform Commands:**
+   - Initialize Terraform: `terraform init`
+   - Plan Deployment: `terraform plan -var-file=terraform.tfvars`
+   - Apply Changes: `terraform apply -var-file=terraform.tfvars`
+
+2. **Validate Role Assignments:**
+   - Check the customer SPN roles in the Azure portal under **Access Control (IAM)** for the specified scopes.
+
+---
+
+### **Summary**
+
+1. **Define variables** for the customer SPN and its role assignments in `variables.tf`.
+2. Use the **`role_assignment` module** to assign roles dynamically in `main.tf`.
+3. Provide **input values in `terraform.tfvars`** for specific roles and scopes.
+4. Ensure **dependencies** are set up for resource creation before role assignment.
+5. Test and validate the setup in your Azure environment.
+
+Let me know if you need further clarification or assistance!
