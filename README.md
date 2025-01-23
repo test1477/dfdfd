@@ -1,11 +1,14 @@
-Here is a detailed step-by-step breakdown of the required updates for both the **Landing Zone Repo** and the **Component Repo**. This will ensure the implementation of dynamic RBAC role assignments using the **map-based approach** with the ability to compute scopes dynamically.
+You're right! If the **customer SPN** is only assigned roles to the **App Resource Group (App RG)**, and there is **no outputs.tf in the Landing Zone repo**, we can simplify the updates. Below, I will correctly detail only the **necessary updates** for the Landing Zone and Component repositories while clarifying the correct approach:
 
 ---
 
 ## **Landing Zone Repo Updates**
 
+Since the Landing Zone repo doesn't have an `outputs.tf` file, and we are only assigning RBAC roles to the **App RG**, we don't need to propagate unnecessary outputs. Instead, we will dynamically construct the scope for the App RG directly in the Component Repo. 
+
 ### **Step 1: Update `variables.tf`**
-Add variables for `rbac_roles_map` and `customer_spn_object_id`.
+
+Define the following variables in the **Landing Zone Repo**:
 
 ```hcl
 variable "customer_spn_object_id" {
@@ -13,20 +16,20 @@ variable "customer_spn_object_id" {
   type        = string
 }
 
-variable "rbac_roles_map" {
-  description = "Map of RBAC roles for different applications/teams"
-  type = map(list(object({
+variable "app_rbac_roles" {
+  description = "List of RBAC roles for the customer SPN in the App RG"
+  type = list(object({
     role_definition      = string
     role_definition_type = string
-    scope                = string
-  })))
+  }))
 }
 ```
 
 ---
 
 ### **Step 2: Update `main.tf`**
-Pass the `rbac_roles_map` and `customer_spn_object_id` variables into the `landing_zone` module.
+
+Pass the **SPN object ID** and **App RG RBAC roles** to the Landing Zone module:
 
 ```hcl
 module "landing_zone" {
@@ -44,67 +47,54 @@ module "landing_zone" {
   # Resource tags
   tags = local.core_tagging
 
-  # Pass RBAC-related variables
-  rbac_roles_map         = var.rbac_roles_map
+  # RBAC-related variables
   customer_spn_object_id = var.customer_spn_object_id
+  app_rbac_roles         = var.app_rbac_roles
 }
 ```
 
 ---
 
 ### **Step 3: Update `terraform.tfvars`**
-Provide values for `rbac_roles_map` and `customer_spn_object_id`. Use placeholders for scopes, which will be replaced dynamically.
+
+Define the SPN and default RBAC roles assigned to the App RG in `terraform.tfvars`.
 
 ```hcl
 customer_spn_object_id = "spn-object-id"
 
-rbac_roles_map = {
-  "default" = [
-    {
-      role_definition      = "Website Contributor"
-      role_definition_type = "name"
-      scope                = "placeholder-scope"
-    },
-    {
-      role_definition      = "Key Vault Administrator"
-      role_definition_type = "name"
-      scope                = "placeholder-scope"
-    },
-    {
-      role_definition      = "API Management Service Contributor"
-      role_definition_type = "name"
-      scope                = "placeholder-scope"
-    },
-    {
-      role_definition      = "Storage Blob Data Contributor"
-      role_definition_type = "name"
-      scope                = "placeholder-scope"
-    }
-  ]
-}
+app_rbac_roles = [
+  {
+    role_definition      = "Website Contributor"
+    role_definition_type = "name"
+  },
+  {
+    role_definition      = "Key Vault Administrator"
+    role_definition_type = "name"
+  },
+  {
+    role_definition      = "API Management Service Contributor"
+    role_definition_type = "name"
+  },
+  {
+    role_definition      = "Storage Blob Data Contributor"
+    role_definition_type = "name"
+  }
+]
 ```
 
----
-
-### **Step 4: Update `outputs.tf`**
-Expose the `rbac_roles_map` and `customer_spn_object_id` outputs (if needed by downstream modules or teams).
-
-```hcl
-output "rbac_roles_map" {
-  value = var.rbac_roles_map
-}
-
-output "customer_spn_object_id" {
-  value = var.customer_spn_object_id
-}
-```
+This ensures that all required roles are passed as a list to the Landing Zone module.
 
 ---
 
 ## **Component Repo Updates**
 
+In the Component Repo, we will use the **App RG name and ID** to dynamically construct the `scope` for the customer SPN role assignments.
+
+---
+
 ### **Step 1: Update `variables.tf`**
-Add variables for `rbac_roles_map` and `customer_spn_object_id` in the component repo.
+
+Add the following variables to accept the **customer SPN object ID** and **App RG RBAC roles**:
 
 ```hcl
 variable "customer_spn_object_id" {
@@ -112,98 +102,68 @@ variable "customer_spn_object_id" {
   type        = string
 }
 
-variable "rbac_roles_map" {
-  description = "Map of RBAC roles for different applications/teams"
-  type = map(list(object({
+variable "app_rbac_roles" {
+  description = "List of RBAC roles for the customer SPN in the App RG"
+  type = list(object({
     role_definition      = string
     role_definition_type = string
-    scope                = string
-  })))
+  }))
 }
 ```
 
 ---
 
 ### **Step 2: Update `main.tf`**
-Dynamically construct `scope` and pass RBAC assignments to the `role_assignment` module.
+
+Use the `app_rbac_roles` and dynamically construct the `scope` for the App Resource Group using its name and ID.
 
 ```hcl
 module "role_assignment" {
   source = "github.com/cloud-era/terraform-azure-role_assignment?ref=init"
 
-  res_rbac_info = flatten([
-    for app, roles in var.rbac_roles_map : [
-      for role in roles : {
-        principal_id                 = var.customer_spn_object_id
-        role_definition              = role.role_definition
-        role_definition_type         = role.role_definition_type
-        scope                        = replace(
-          role.scope,
-          "placeholder-scope",
-          "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.system_rg_name}"
-        )
-        skip_service_principal_aad_check = false
-      }
-    ]
-  ])
-}
-```
-
-#### Key Details:
-- **Dynamic Scope**: The `replace` function dynamically replaces `placeholder-scope` with the correct subscription ID and resource group name.
-- **Flexibility**: The `rbac_roles_map` can contain roles for multiple applications, with `"default"` acting as the base configuration.
-
----
-
-### **Step 3: Update `outputs.tf`**
-Expose any outputs needed by the `landing_zone` module.
-
-```hcl
-output "mod_out_resource_group_names" {
-  value = module.resource_groups.res_out_rg_names[0]
-}
-
-output "mod_out_resource_group_ids" {
-  value = module.resource_groups.res_out_rg_ids[0]
-}
-```
-
----
-
-### **Step 4: Update `locals.tf`**
-Define `local.system_rg_name` and other dynamic variables used in the `scope` construction.
-
-```hcl
-locals {
-  system_rg_name    = data.azurerm_resource_group.system_rg.name
-  app_rg_name       = data.azurerm_resource_group.app_rg.name
-  subscription_id   = data.azurerm_client_config.current.subscription_id
-}
-```
-
----
-
-### **Step 5: Update `terraform.tfvars`**
-Provide values for any required variables in `terraform.tfvars`.
-
-```hcl
-customer_spn_object_id = "spn-object-id"
-
-rbac_roles_map = {
-  "default" = [
-    {
-      role_definition      = "Website Contributor"
-      role_definition_type = "name"
-      scope                = "placeholder-scope"
-    },
-    {
-      role_definition      = "Key Vault Administrator"
-      role_definition_type = "name"
-      scope                = "placeholder-scope"
+  res_rbac_info = [
+    for role in var.app_rbac_roles : {
+      principal_id                 = var.customer_spn_object_id
+      role_definition              = role.role_definition
+      role_definition_type         = role.role_definition_type
+      scope                        = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.app_rg_name}"
+      skip_service_principal_aad_check = false
     }
   ]
 }
 ```
+
+#### Explanation:
+- **`principal_id`**: The customer SPN object ID.
+- **`role_definition`**: The role to be assigned.
+- **`scope`**: Dynamically constructed using the **App RG name** (`local.app_rg_name`) and **subscription ID**.
+- **`skip_service_principal_aad_check`**: Set to `false` to ensure the SPN is verified.
+
+---
+
+### **Step 3: Update `locals.tf`**
+
+Define `local.app_rg_name` to fetch the App RG name dynamically.
+
+```hcl
+locals {
+  app_rg_name = "eon${var.eonid}-${var.location}-${var.lz_name}-app-rg"
+}
+```
+
+This ensures that the `scope` is dynamically generated for the App RG without requiring hardcoding in the variables or module inputs.
+
+---
+
+### **Step 4: Ensure `data.azurerm_client_config` is Available**
+
+Add a `data` block to fetch the subscription ID dynamically.
+
+```hcl
+data "azurerm_client_config" "current" {}
+```
+
+This provides the subscription ID needed for constructing the `scope`.
 
 ---
 
@@ -211,40 +171,34 @@ rbac_roles_map = {
 
 ### **Landing Zone Repo**
 1. **`variables.tf`**
-   - Add `customer_spn_object_id` and `rbac_roles_map`.
+   - Add `customer_spn_object_id` and `app_rbac_roles` variables.
 
 2. **`main.tf`**
-   - Pass `customer_spn_object_id` and `rbac_roles_map` to the `landing_zone` module.
+   - Pass the `customer_spn_object_id` and `app_rbac_roles` variables to the **Landing Zone module**.
 
 3. **`terraform.tfvars`**
-   - Provide values for `customer_spn_object_id` and `rbac_roles_map`.
-
-4. **`outputs.tf`**
-   - Expose `rbac_roles_map` and `customer_spn_object_id` if needed.
+   - Define the SPN object ID and default RBAC roles for the App RG.
 
 ---
 
 ### **Component Repo**
 1. **`variables.tf`**
-   - Add `customer_spn_object_id` and `rbac_roles_map`.
+   - Add `customer_spn_object_id` and `app_rbac_roles` variables.
 
 2. **`main.tf`**
-   - Dynamically construct `scope` and pass it to the `role_assignment` module.
+   - Use `app_rbac_roles` to dynamically assign roles to the App RG.
 
-3. **`outputs.tf`**
-   - Expose required outputs (e.g., `resource group names` and `IDs`).
+3. **`locals.tf`**
+   - Define `local.app_rg_name` to construct the App RG name dynamically.
 
-4. **`locals.tf`**
-   - Define locals for subscription ID and resource group names.
-
-5. **`terraform.tfvars`**
-   - Provide values for `customer_spn_object_id` and `rbac_roles_map`.
+4. **`data.azurerm_client_config`**
+   - Add a data block to fetch the subscription ID.
 
 ---
 
-This structure ensures:
-- **Reusability**: Default roles (`default`) are applied across teams, and additional roles can be easily added.
-- **Scalability**: New applications or roles are added without modifying the core logic.
-- **Dynamic Scope**: The `scope` is computed dynamically using the subscription ID and resource group names.
+This approach:
+- Dynamically constructs the **scope** for the App RG using its name and subscription ID.
+- Assigns all default RBAC roles to the **customer SPN** for the App RG.
+- Allows flexibility to add additional roles later if needed.
 
-Let me know if you'd like me to expand on any step or provide further details!
+Let me know if further clarification is required!
