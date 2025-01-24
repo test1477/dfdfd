@@ -1,33 +1,13 @@
-Thank you for the clarification! Since you're using the URL `https://frigate.jfrog.io/artifactory` for your JFrog Artifactory instance, it seems that the issue lies with the endpoint you're trying to access. To get a list of repositories or metadata for repositories, you need to ensure you're using the correct Artifactory REST API endpoint.
+It seems the data returned by the JFrog API for the `repositories` endpoint provides high-level information about the repositories, such as whether they are local, remote, or virtual, rather than the specific package types (e.g., npm, Docker, Terraform, Helm) or artifact-level details like package names, versions, and creation dates. 
 
-### Steps to Follow:
+To fetch detailed information about the contents of a repository (e.g., artifacts, versions, creation dates), you need to query **each repository individually** using its respective API endpoint. Here's how you can fix this and fetch artifact-level details:
 
-1. **Verify the correct JFrog API endpoint for repositories**:
-   The correct endpoint to list repositories in JFrog Artifactory should be:
-   ```bash
-   https://frigate.jfrog.io/artifactory/api/repositories
-   ```
+---
 
-2. **API Authentication**:
-   You can authenticate using either an API token or username/password. Since you're using a token, ensure that your token has the correct permissions to list repositories.
-
-3. **Test the API manually**:
-   Before using it in Python, you can test the endpoint with `curl` to check if it works correctly. Replace `your_api_token` with your actual token.
-
-   ```bash
-   curl -u your_api_token: https://frigate.jfrog.io/artifactory/api/repositories
-   ```
-
-   If your Artifactory setup uses a bearer token for authentication, use this `curl` command instead:
-   
-   ```bash
-   curl -H "Authorization: Bearer your_api_token" https://frigate.jfrog.io/artifactory/api/repositories
-   ```
-
-4. **Update the Python script**:
-   Assuming that `https://frigate.jfrog.io/artifactory/api/repositories` is the correct endpoint, let's update the Python script with the correct endpoint and ensure you're getting repository details.
-
-### Updated Python Script:
+### Adjusted Script: Fetch Artifact-Level Data from Each Repository
+The updated script will:
+1. Fetch a list of repositories.
+2. For each repository, query its artifacts to fetch details like package type, package name, version, and creation date.
 
 ```python
 import requests
@@ -39,7 +19,7 @@ from requests.packages.urllib3.exceptions import InsecureRequestWarning
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
 # JFrog Artifactory instance details
-JFROG_URL = 'https://frigate.jfrog.io/artifactory/api/'  # Correct base URL
+JFROG_URL = 'https://frigate.jfrog.io/artifactory'  # Correct base URL
 ARTIFACTORY_TOKEN = 'your_artifactory_api_token'  # Replace with your actual API token
 
 # Headers for the request
@@ -50,43 +30,61 @@ headers = {
 
 # Function to fetch repositories from JFrog Artifactory
 def fetch_repositories():
-    url = f"{JFROG_URL}repositories"  # Correct endpoint to fetch repositories
-    response = requests.get(url, headers=headers, verify=False)  # Disable SSL verification for now
+    url = f"{JFROG_URL}/api/repositories"
+    response = requests.get(url, headers=headers, verify=False)
 
     if response.status_code == 200:
         return response.json()  # Return JSON response if successful
-    elif response.status_code == 404:
-        print("Error: 404 - The requested URL or repository was not found.")
-        return []
     else:
         print(f"Failed to fetch repositories: {response.status_code}")
         return []
 
-# Function to extract required details from the repository data
-def extract_repo_details(repo_data):
+# Function to fetch artifacts from a repository
+def fetch_artifacts(repo_name):
+    url = f"{JFROG_URL}/api/storage/{repo_name}"  # API endpoint to get repository storage details
+    response = requests.get(url, headers=headers, verify=False)
+
+    if response.status_code == 200:
+        return response.json()  # Return JSON response if successful
+    else:
+        print(f"Failed to fetch artifacts for {repo_name}: {response.status_code}")
+        return {}
+
+# Function to extract detailed artifact information
+def extract_repo_details(repositories):
     repo_details = []
 
-    for repo in repo_data:
+    for repo in repositories:
         repo_name = repo.get("key", "N/A")
-        package_type = repo.get("type", "N/A")
-        package_name = repo.get("packageName", "N/A")
-        version = repo.get("version", "N/A")
-        url = f"{JFROG_URL}{repo_name}"
-        created_date = repo.get("created", "N/A")
-        license = repo.get("license", "N/A")
-        search = repo.get("search", "N/A")
-        artifact_instance = repo.get("instance", "N/A")
+        repo_type = repo.get("type", "N/A")  # Local, remote, or virtual
 
-        repo_details.append([
-            repo_name, package_type, package_name, version,
-            url, created_date, license, search, artifact_instance
-        ])
+        # Fetch artifact details for the repository
+        artifacts_data = fetch_artifacts(repo_name)
+
+        if "children" in artifacts_data:  # Check if the repository has artifacts
+            for artifact in artifacts_data["children"]:
+                artifact_path = artifact.get("uri", "N/A")
+                artifact_url = f"{JFROG_URL}/{repo_name}{artifact_path}"
+                created_date = artifacts_data.get("created", "N/A")
+                package_type = repo.get("packageType", "N/A")  # Should give npm, docker, etc.
+                package_name = artifact_path.split("/")[-1]  # Extract the artifact name from the path
+
+                repo_details.append([
+                    repo_name, repo_type, package_type, package_name, "N/A",
+                    artifact_url, created_date, "N/A", "N/A"
+                ])
+        else:
+            # If no artifacts are found, append basic repository information
+            repo_details.append([
+                repo_name, repo_type, "N/A", "N/A", "N/A",
+                f"{JFROG_URL}/{repo_name}", "N/A", "N/A", "N/A"
+            ])
 
     return repo_details
 
 # Function to save the extracted data into a CSV file
 def save_to_csv(data, filename='jfrog_repositories.csv'):
-    headers = ['Repo Name', 'Package Type', 'Package Name', 'Version', 'URL', 'Creation Date', 'License', 'Search', 'Artifact Instance']
+    headers = ['Repo Name', 'Repo Type', 'Package Type', 'Package Name', 'Version', 'URL', 'Creation Date', 'License', 'Artifact Instance']
     
     with open(filename, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
@@ -97,10 +95,10 @@ def save_to_csv(data, filename='jfrog_repositories.csv'):
 
 # Main function to fetch and process the repositories data
 def main():
-    repositories_data = fetch_repositories()
+    repositories = fetch_repositories()
 
-    if repositories_data:
-        repo_details = extract_repo_details(repositories_data)
+    if repositories:
+        repo_details = extract_repo_details(repositories)
         save_to_csv(repo_details)
     else:
         print("No repository data found.")
@@ -109,17 +107,50 @@ if __name__ == '__main__':
     main()
 ```
 
-### Key Points:
-1. **Correct Endpoint**: The endpoint `https://frigate.jfrog.io/artifactory/api/repositories` is used to fetch the repositories.
-2. **Authentication**: The script uses the `Authorization: Bearer` header for authentication with the API token.
-3. **Error Handling**: The script handles `404` errors if the requested resource is not found.
+---
 
-### Testing:
-1. **Run the `curl` command** to check the response from JFrog Artifactory.
-2. **Run the Python script** to fetch repository data and save it to a CSV file.
+### Key Updates:
 
-### Next Steps:
-1. **Verify Token Permissions**: Ensure that the token has access to the `repositories` API endpoint in your Artifactory instance.
-2. **Test with Correct URL**: Test the updated URL (`https://frigate.jfrog.io/artifactory/api/repositories`) and ensure it works.
+1. **Fetch Repository Storage Details**:
+   - The script queries each repository's storage details using `https://frigate.jfrog.io/artifactory/api/storage/<repo_name>`.
+
+2. **Artifact-Level Details**:
+   - The script extracts artifact paths (`artifact_path`), repository type (`local`, `remote`, or `virtual`), package type (e.g., npm, Docker), and URLs.
+   - It infers the `package_name` from the artifact path.
+
+3. **Fallback for Empty Repositories**:
+   - If a repository doesn't contain artifacts, it will still log basic details (e.g., repo name, type, and URL).
+
+---
+
+### Expected Output in CSV:
+
+The CSV will include the following columns:
+- **Repo Name**: Name of the repository.
+- **Repo Type**: Whether the repository is local, remote, or virtual.
+- **Package Type**: The type of package the repository is intended for (e.g., npm, Docker).
+- **Package Name**: Name of the artifact (inferred from the path).
+- **Version**: Currently hardcoded as `N/A` (can be extended based on additional API calls).
+- **URL**: The full URL to the artifact.
+- **Creation Date**: The creation date of the repository or artifact.
+- **License**: Currently `N/A` (can be extended).
+- **Artifact Instance**: Currently `N/A` (can be extended).
+
+---
+
+### Testing and Debugging:
+1. **Test with `curl`**:
+   - Verify that `https://frigate.jfrog.io/artifactory/api/repositories` and `https://frigate.jfrog.io/artifactory/api/storage/<repo_name>` return the expected JSON structure.
+
+2. **Run the Script**:
+   - Save the script as `jfrog_report.py` and execute it:
+     ```bash
+     python jfrog_report.py
+     ```
+
+3. **Verify the CSV**:
+   - The resulting file `jfrog_repositories.csv` should have detailed data about repositories and their artifacts.
+
+---
 
 Let me know how this works or if you need further assistance!
