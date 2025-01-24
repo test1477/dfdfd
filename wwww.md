@@ -1,20 +1,14 @@
-The issue arises because the current script does not yet extract artifact versions and artifact instance details. These details may not be available from the `api/storage/<repo_name>` endpoint directly and might require querying artifact-specific metadata through another API endpoint.
+To retrieve **all artifact versions** and their corresponding **package names** under a repository in JFrog Artifactory, we need to query the **repository contents recursively**. The JFrog REST API provides the `api/storage/<repo_name>` endpoint, which can be used with the `list` parameter to fetch the full directory tree. This allows us to navigate through all paths and extract version-specific artifacts.
 
-To address this:
-
-1. **Artifact Version**:
-   - Versions are typically part of the artifact's path or retrieved from metadata.
-   - If your repository follows a standard structure (e.g., `repo_name/artifact/version`), you can parse the version from the artifact path.
-
-2. **Artifact Instance**:
-   - This field isn’t directly available from the API unless your JFrog instance provides a custom property or metadata.
-   - You may need to consult your JFrog administrator for more details on where to find this data.
-
-Below is an updated version of the script that includes additional logic to infer `version` and handle `artifact_instance` as a placeholder.
+Here’s how we can enhance the script to list all artifacts and extract the version and package name for each artifact:
 
 ---
 
-### Updated Script: Extracting Version and Handling Artifact Instance
+### Enhanced Script for Recursive Artifact Retrieval
+This script:
+1. Queries the repository tree recursively to fetch all artifacts.
+2. Extracts version information from the directory structure.
+3. Handles repositories with multiple versions of the same package.
 
 ```python
 import requests
@@ -46,9 +40,9 @@ def fetch_repositories():
         print(f"Failed to fetch repositories: {response.status_code}")
         return []
 
-# Function to fetch artifacts from a repository
-def fetch_artifacts(repo_name):
-    url = f"{JFROG_URL}/api/storage/{repo_name}"  # API endpoint to get repository storage details
+# Function to fetch all artifacts recursively from a repository
+def fetch_artifacts_recursive(repo_name):
+    url = f"{JFROG_URL}/api/storage/{repo_name}?list&deep=1"  # Recursive fetch
     response = requests.get(url, headers=headers, verify=False)
 
     if response.status_code == 200:
@@ -57,14 +51,14 @@ def fetch_artifacts(repo_name):
         print(f"Failed to fetch artifacts for {repo_name}: {response.status_code}")
         return {}
 
-# Function to infer artifact version from its path
-def infer_version(artifact_path):
-    # Split the path and check if it contains a version-like segment
-    segments = artifact_path.strip("/").split("/")
-    for segment in segments:
-        if segment[0].isdigit():  # Assuming version starts with a number
-            return segment
-    return "N/A"
+# Function to infer version and package name from artifact path
+def extract_version_and_package(path):
+    segments = path.strip("/").split("/")
+    if len(segments) >= 2:
+        package_name = segments[0]  # Assume the first segment is the package name
+        version = segments[1]  # Assume the second segment is the version
+        return package_name, version
+    return "N/A", "N/A"
 
 # Function to extract detailed artifact information
 def extract_repo_details(repositories):
@@ -76,19 +70,19 @@ def extract_repo_details(repositories):
         package_type = repo.get("packageType", "N/A")  # npm, Docker, etc.
 
         # Fetch artifact details for the repository
-        artifacts_data = fetch_artifacts(repo_name)
+        artifacts_data = fetch_artifacts_recursive(repo_name)
 
-        if "children" in artifacts_data:  # Check if the repository has artifacts
-            for artifact in artifacts_data["children"]:
+        if "files" in artifacts_data:  # Check if the repository has artifacts
+            for artifact in artifacts_data["files"]:
                 artifact_path = artifact.get("uri", "N/A")
                 artifact_url = f"{JFROG_URL}/{repo_name}{artifact_path}"
-                version = infer_version(artifact_path)  # Infer version from the path
-                created_date = artifacts_data.get("created", "N/A")
-                artifact_instance = "frigate.jfrog.io"  # Placeholder for artifact instance
+                created_date = artifact.get("lastModified", "N/A")
+                size = artifact.get("size", "N/A")
+                package_name, version = extract_version_and_package(artifact_path)
 
                 repo_details.append([
-                    repo_name, repo_type, package_type, artifact_path.strip("/"), version,
-                    artifact_url, created_date, "N/A", artifact_instance
+                    repo_name, repo_type, package_type, package_name, version,
+                    artifact_url, created_date, "N/A", "frigate.jfrog.io"
                 ])
         else:
             # If no artifacts are found, append basic repository information
@@ -127,25 +121,27 @@ if __name__ == '__main__':
 ---
 
 ### Key Updates:
+1. **Recursive Artifact Retrieval**:
+   - The script uses the `?list&deep=1` query parameter in the `api/storage/<repo_name>` endpoint to fetch all artifact paths recursively.
 
-1. **Version Extraction**:
-   - The `infer_version` function attempts to extract the version from the artifact path, assuming that one segment in the path looks like a version (e.g., `1.0.0` or `v1.2`).
-   - If no version-like segment is found, it defaults to `"N/A"`.
+2. **Version and Package Name Extraction**:
+   - The `extract_version_and_package` function assumes the directory structure follows a standard pattern like:
+     ```
+     <repo_name>/<package_name>/<version>/<artifact_name>
+     ```
+   - It extracts the package name and version from the first two segments of the path.
 
-2. **Artifact Instance**:
-   - The `artifact_instance` field is hardcoded as `"frigate.jfrog.io"` since this value might represent your JFrog instance.
-
-3. **Package Name**:
-   - Extracted directly from the artifact path by stripping the slashes (`/`).
-
-4. **Enhanced Error Handling**:
-   - The script handles cases where artifacts are not available for a repository.
+3. **Enhanced Artifact Details**:
+   - The script now includes:
+     - `artifact_url`: Full URL of the artifact.
+     - `created_date`: The last modified timestamp of the artifact.
+     - `size`: (Optional) Size of the artifact (currently unused in CSV).
 
 ---
 
-### Example Output:
+### Example Output (CSV):
 
-For a repository `npm-repo` containing the following artifacts:
+For a repository `npm-repo` with artifacts structured as:
 
 ```plaintext
 npm-repo/
@@ -157,21 +153,28 @@ npm-repo/
             react-17.0.2.tgz
 ```
 
-The CSV output would look like this:
+The output will look like this:
 
-| Repo Name | Repo Type | Package Type | Package Name        | Version  | URL                                        | Creation Date | License | Artifact Instance   |
-|-----------|-----------|--------------|---------------------|----------|--------------------------------------------|---------------|---------|---------------------|
-| npm-repo  | local     | npm          | lodash/4.17.21      | 4.17.21  | https://frigate.jfrog.io/npm-repo/lodash   | N/A           | N/A     | frigate.jfrog.io    |
-| npm-repo  | local     | npm          | react/17.0.2        | 17.0.2   | https://frigate.jfrog.io/npm-repo/react    | N/A           | N/A     | frigate.jfrog.io    |
+| Repo Name  | Repo Type | Package Type | Package Name | Version  | URL                                             | Creation Date | License | Artifact Instance   |
+|------------|-----------|--------------|--------------|----------|-------------------------------------------------|---------------|---------|---------------------|
+| npm-repo   | local     | npm          | lodash       | 4.17.21  | https://frigate.jfrog.io/npm-repo/lodash/4.17.21/lodash-4.17.21.tgz | 2024-01-23T12:34:56 | N/A     | frigate.jfrog.io    |
+| npm-repo   | local     | npm          | react        | 17.0.2   | https://frigate.jfrog.io/npm-repo/react/17.0.2/react-17.0.2.tgz     | 2024-01-23T12:34:56 | N/A     | frigate.jfrog.io    |
 
 ---
 
-### Limitations:
-1. **Artifact Metadata**:
-   - To fetch metadata like creation date, license, and specific package types, you may need to call additional JFrog APIs (e.g., the AQL API).
-   - Let me know if you'd like to extend the script for these details.
+### Notes:
+1. **Standard Directory Structure**:
+   - This script assumes a standard directory structure. If your Artifactory uses a different layout, modify `extract_version_and_package`.
 
-2. **Static `artifact_instance`**:
-   - If you need a dynamic artifact instance value, provide more context about how to extract or compute this field.
+2. **License Field**:
+   - Currently hardcoded as `"N/A"`. You can extend the script to fetch license details from Artifactory metadata (if available).
 
-Let me know how this version works for you!
+3. **Pagination Handling**:
+   - If there are many artifacts, the API may paginate results. Let me know if pagination is required, and I’ll help you enhance the script.
+
+---
+
+### Next Steps:
+1. Test the script and verify the output CSV.
+2. Check if the directory structure and inferred versions align with your expectations.
+3. Let me know if you need further refinements or additional features!
