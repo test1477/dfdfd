@@ -1,16 +1,8 @@
-To include additional fields like `license` and `secarch` in the output, as well as save the file with the name format `EV_EOL_<current_date>.csv`, we can make the following updates:
+Sure! To leave fields like `license` and `secarch` blank instead of filling them with `"N/A"`, we can simply replace the `"N/A"` placeholders with an empty string (`""`). Here's the updated script:
 
 ---
 
-### Updated Script
-
-This version:
-1. **Includes `license` and `secarch`**:
-   - These fields can be placeholders (`"N/A"`) if they are unavailable in the metadata.
-2. **Dynamically Saves the Output File**:
-   - The file is saved as `EV_EOL_<current_date>.csv`.
-
----
+### Updated Script with Blank Fields for Missing Data
 
 ```python
 import requests
@@ -72,7 +64,7 @@ def process_repository(repo_name, package_type):
     for artifact in artifact_list:
         artifact_path = artifact.get("uri", "")
         artifact_url = urljoin(f"{JFROG_URL}/{repo_name}", artifact_path)
-        created_date = artifact.get("lastModified", "N/A")
+        created_date = artifact.get("lastModified", "")
 
         # Parse package name and version from artifact path
         segments = artifact_path.strip("/").split("/")
@@ -81,7 +73,7 @@ def process_repository(repo_name, package_type):
             version = segments[-2]  # Second-to-last segment
         else:
             package_name = repo_name
-            version = "N/A"
+            version = ""
 
         # Append details
         repo_details.append({
@@ -91,8 +83,8 @@ def process_repository(repo_name, package_type):
             "version": version,
             "url": artifact_url,
             "created_date": created_date,
-            "license": "N/A",  # Placeholder, adjust if license data is available
-            "secarch": "N/A",  # Placeholder, adjust if secarch data is available
+            "license": "",  # Leave blank if not available
+            "secarch": "",  # Leave blank if not available
             "artifactory_instance": "frigate.jfrog.io"
         })
     
@@ -122,7 +114,7 @@ def main():
 
     for repo in repositories:
         repo_name = repo.get("key")
-        package_type = repo.get("packageType", "N/A")  # Dynamically fetch the package type
+        package_type = repo.get("packageType", "")  # Dynamically fetch the package type
         print(f"Processing repository: {repo_name} (Type: {package_type})")
         
         # Process repository artifacts in batches
@@ -140,50 +132,35 @@ if __name__ == '__main__':
 
 ---
 
-### Key Updates:
-1. **`license` and `secarch` Fields**:
-   - Added placeholders for `license` and `secarch` in the output.
-   - If data for these fields is available in the artifact metadata, the script can be enhanced to fetch and populate them dynamically.
+### Key Changes:
 
-2. **Dynamic File Naming**:
-   - The output file name is now dynamically generated as `EV_EOL_<current_date>.csv`, where `<current_date>` is in the format `YYYY-MM-DD`.
+1. **Blank Fields for Missing Data**:
+   - `license` and `secarch` are now set to `""` (blank) instead of `"N/A"`.
+   - The `created_date` and `version` fields also default to `""` if no value is available.
 
-3. **Efficient Metadata Handling**:
-   - Uses batch metadata processing via the `?list&deep=1` API endpoint for faster execution.
+2. **Dynamic File Name**:
+   - Output file is still named as `EV_EOL_<current_date>.csv`.
 
 ---
 
-### Output Example:
+### Example Output:
 
-#### Input Repository Structure:
-```plaintext
-msartaz-train-docker-pr/
-    ace-test/
-        test-github-java/
-            1.0.18/
-                sha256.marker
-npm-ppa-virtual/
-    ppa-fip-security-documentation-client/
-        2.3.0/
-            client-2.3.0.tgz
-```
-
-#### Generated CSV:
-File Name: `EV_EOL_2025-01-24.csv`
+#### CSV File: `EV_EOL_2025-01-24.csv`
 
 | repo_name               | package_type | package_name                                | version  | url                                                                                           | created_date              | license | secarch | artifactory_instance |
 |-------------------------|--------------|---------------------------------------------|----------|-----------------------------------------------------------------------------------------------|---------------------------|---------|---------|-----------------------|
-| msartaz-train-docker-pr | Docker       | msartaz-train-docker-pr/ace-test/test-github-java | 1.0.18   | https://frigate.jfrog.io/artifactory/msartaz-train-docker-pr/ace-test/test-github-java/1.0.18/sha256.marker | 2024-05-01T17:45:42.3832 | N/A     | N/A     | frigate.jfrog.io     |
-| npm-ppa-virtual         | npm          | npm-ppa-virtual/ppa-fip-security-documentation-client | 2.3.0    | https://frigate.jfrog.io/artifactory/npm-ppa-virtual/ppa-fip-security-documentation-client/2.3.0/client-2.3.0.tgz | 2024-01-15T14:20:50.1234 | N/A     | N/A     | frigate.jfrog.io     |
+| msartaz-train-docker-pr | Docker       | msartaz-train-docker-pr/ace-test/test-github-java | 1.0.18   | https://frigate.jfrog.io/artifactory/msartaz-train-docker-pr/ace-test/test-github-java/1.0.18/sha256.marker | 2024-05-01T17:45:42.3832 |         |         | frigate.jfrog.io     |
+| npm-ppa-virtual         | npm          | npm-ppa-virtual/ppa-fip-security-documentation-client | 2.3.0    | https://frigate.jfrog.io/artifactory/npm-ppa-virtual/ppa-fip-security-documentation-client/2.3.0/client-2.3.0.tgz | 2024-01-15T14:20:50.1234 |         |         | frigate.jfrog.io     |
 
 ---
 
 ### Next Steps:
-1. **Run the Script**:
-   - Replace `your_artifactory_api_token` with your JFrog API token.
-   - Execute the script and check the generated file.
 
-2. **Populate `license` and `secarch`**:
-   - If `license` or `secarch` is part of the metadata, we can adjust the script to include it.
+1. **Test the Script**:
+   - Replace `your_artifactory_api_token` with your actual API token.
+   - Run the script and verify the generated CSV file.
 
-Let me know if you need further adjustments!
+2. **Adjust Metadata Mapping**:
+   - If `license` or `secarch` data becomes available in the future, update the script to populate these fields dynamically.
+
+Let me know if you need any further customization! 😊
