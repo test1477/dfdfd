@@ -1,18 +1,38 @@
-To modify the script to fetch artifacts from all repositories in JFrog Artifactory, you need to first retrieve a list of all repositories and then iterate through them. Here's an updated version of the script that accomplishes this:
+To ensure the **package name** and **version** are extracted correctly for **npm artifacts**, such as in the given URL (`https://frigate.jfrog.io/.npm/ppa-fi-qsg-documentation-client/ppa-fi-qsg-documentation-client-1.0.1.json`), we need to adjust the logic in the `parse_artifact_details` function.
+
+---
+
+### Updated Logic for NPM Artifacts
+
+For **npm artifacts**:
+1. **Package Name**: The segment before the version in the artifact's filename.
+   - Example: `ppa-fi-qsg-documentation-client` (extracted from `ppa-fi-qsg-documentation-client-1.0.1.json`).
+2. **Version**: The version embedded in the artifact filename.
+   - Example: `1.0.1` (extracted from `ppa-fi-qsg-documentation-client-1.0.1.json`).
+
+This requires detecting and parsing the artifact filename in the path (e.g., `ppa-fi-qsg-documentation-client-1.0.1.json`).
+
+---
+
+### Adjusted Script
+
+Here’s the updated script with refined logic for handling npm artifacts:
 
 ```python
 import requests
 import csv
 import warnings
 from urllib.parse import urljoin
+from datetime import datetime
+import re
 
 # Suppress SSL verification warnings
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
 # JFrog Artifactory instance details
-JFROG_URL = 'https://frigate.jfrog.io/artifactory'
-ARTIFACTORY_TOKEN = 'your_artifactory_api_token'
+JFROG_URL = 'https://frigate.jfrog.io/artifactory'  # Base URL for JFrog
+ARTIFACTORY_TOKEN = 'your_artifactory_api_token'  # Replace with your API token
 
 # Headers for the API request
 headers = {
@@ -20,102 +40,172 @@ headers = {
     'Accept': 'application/json',
 }
 
-def get_all_repositories():
+# Function to fetch all repositories
+def fetch_repositories():
+    """
+    Fetches a list of all repositories in the Artifactory instance.
+    """
     url = f"{JFROG_URL}/api/repositories"
     response = requests.get(url, headers=headers, verify=False)
+
     if response.status_code == 200:
-        return [repo['key'] for repo in response.json()]
+        return response.json()
     else:
         print(f"Failed to fetch repositories: {response.status_code}")
         return []
 
+# Function to list all artifacts in a repository
 def list_artifacts(repo_name):
+    """
+    Recursively fetches all artifacts in the specified repository.
+    """
     url = f"{JFROG_URL}/api/storage/{repo_name}?list&deep=1"
     response = requests.get(url, headers=headers, verify=False)
+
     if response.status_code == 200:
         return response.json().get("files", [])
     else:
         print(f"Failed to list artifacts for {repo_name}: {response.status_code}")
         return []
 
-def fetch_metadata(repo_name, artifact_path):
-    url = f"{JFROG_URL}/api/storage/{repo_name}{artifact_path}"
-    response = requests.get(url, headers=headers, verify=False)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Failed to fetch metadata for {repo_name}{artifact_path}: {response.status_code}")
-        return {}
+# Function to extract package name and version from artifact path
+def parse_artifact_details(repo_name, artifact_path, package_type):
+    """
+    Extracts package name and version based on the artifact path and package type.
+    - For npm artifacts, extracts from the filename.
+    - For other types, uses the default logic.
+    """
+    artifact_filename = artifact_path.strip("/").split("/")[-1]
 
-def parse_artifact_details(repo_name, artifact_path):
+    if package_type == "npm" and artifact_filename:
+        # Extract npm package name and version using regex
+        match = re.match(r"(.+)-(\d+\.\d+\.\d+)\.json", artifact_filename)
+        if match:
+            package_name, version = match.groups()
+            return package_name, version
+
+    # Default logic for non-npm repositories
     segments = artifact_path.strip("/").split("/")
     if len(segments) >= 2:
         package_name = f"{repo_name}/{'/'.join(segments[:-2])}"
         version = segments[-2]
         return package_name, version
-    return f"{repo_name}/N/A", "N/A"
 
-def process_repository(repo_name):
+    return repo_name, ""
+
+# Function to process repository artifacts
+def process_repository(repo_name, package_type):
+    """
+    Processes all artifacts in a repository using batch metadata from the recursive listing.
+    """
     artifact_list = list_artifacts(repo_name)
     repo_details = []
+
     for artifact in artifact_list:
         artifact_path = artifact.get("uri", "")
-        metadata = fetch_metadata(repo_name, artifact_path)
-        package_name, version = parse_artifact_details(repo_name, artifact_path)
+        artifact_url = urljoin(f"{JFROG_URL}/{repo_name}", artifact_path)
+        created_date = artifact.get("lastModified", "")
+
+        # Parse package name and version based on package type
+        package_name, version = parse_artifact_details(repo_name, artifact_path, package_type)
+
+        # Append details
         repo_details.append({
-            "repo_name": metadata.get("repo", repo_name),
-            "package_type": "Docker",  # You may need to determine this dynamically
+            "repo_name": repo_name,
+            "package_type": package_type,
             "package_name": package_name,
             "version": version,
-            "url": metadata.get("downloadUri", "N/A"),
-            "created_date": metadata.get("created", "N/A"),
+            "url": artifact_url,
+            "created_date": created_date,
+            "license": "",  # Leave blank if not available
+            "secarch": "",  # Leave blank if not available
             "artifactory_instance": "frigate.jfrog.io"
         })
+    
     return repo_details
 
-def save_to_csv(data, filename='jfrog_artifact_metadata.csv'):
-    headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'artifactory_instance']
+# Function to save data to CSV
+def save_to_csv(data, filename):
+    """
+    Saves extracted metadata to a CSV file.
+    """
+    headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'license', 'secarch', 'artifactory_instance']
+    
     with open(filename, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=headers)
         writer.writeheader()
         writer.writerows(data)
+    
     print(f"Data has been written to {filename}")
 
+# Main function to process all repositories
 def main():
-    repositories = get_all_repositories()
+    """
+    Main function to process all repositories and extract metadata.
+    """
+    repositories = fetch_repositories()
     all_repo_details = []
-    for repo_name in repositories:
-        print(f"Processing repository: {repo_name}")
-        repo_details = process_repository(repo_name)
+
+    for repo in repositories:
+        repo_name = repo.get("key")
+        package_type = repo.get("packageType", "")  # Dynamically fetch the package type
+        print(f"Processing repository: {repo_name} (Type: {package_type})")
+        
+        # Process repository artifacts in batches
+        repo_details = process_repository(repo_name, package_type)
         all_repo_details.extend(repo_details)
-    save_to_csv(all_repo_details)
+
+    # Save all details to CSV with a dynamic file name
+    current_date = datetime.now().strftime('%Y-%m-%d')  # Current date in YYYY-MM-DD format
+    output_file = f"EV_EOL_{current_date}.csv"
+    save_to_csv(all_repo_details, output_file)
 
 if __name__ == '__main__':
     main()
 ```
 
-This updated script includes the following changes:
+---
 
-1. A new function `get_all_repositories()` has been added to fetch the list of all repositories from JFrog Artifactory[1].
+### Key Changes:
 
-2. The `main()` function now uses `get_all_repositories()` to get a list of all repositories instead of using a hardcoded list[1].
+1. **Updated `parse_artifact_details`**:
+   - For npm artifacts, uses a regular expression (`re.match`) to extract the package name and version from the artifact filename.
+   - Example:
+     - Artifact: `ppa-fi-qsg-documentation-client-1.0.1.json`
+     - Extracted `package_name`: `ppa-fi-qsg-documentation-client`
+     - Extracted `version`: `1.0.1`
 
-3. The script iterates through all repositories, processing each one and collecting metadata for all artifacts[1].
+2. **Default Logic for Non-NPM Repositories**:
+   - Retains the existing logic for other repository types (e.g., Docker, Helm).
 
-4. The `parse_artifact_details()` function remains the same, extracting package name and version from the artifact path.
+3. **Regex Pattern for NPM Artifacts**:
+   - Matches filenames in the format `<package_name>-<version>.json`.
 
-5. The script still uses the same CSV output format, saving data for all repositories in a single file.
+---
 
-Remember to replace `'your_artifactory_api_token'` with your actual JFrog Artifactory API token[1]. Also, make sure you have the necessary permissions to access all repositories and their contents.
+### Example Output (CSV):
 
-This script will now fetch metadata for artifacts from all repositories in your JFrog Artifactory instance, providing a comprehensive overview of your artifacts across all repositories[1][3].
+For an npm repository with the following artifact:
 
-Citations:
-[1] https://stackoverflow.com/questions/54200143/artifcatory-rest-api-to-list-all-the-repositories/54207176
-[2] https://stackoverflow.com/questions/27981545/suppress-insecurerequestwarning-unverified-https-request-is-being-made-in-pytho/44850849
-[3] https://stackoverflow.com/questions/72318187/get-all-repositories-of-two-package-types-via-artifactory-api/72335821
-[4] https://jfrog.com/help/r/jfrog-rest-apis/get-certificates
-[5] https://releases.jfrog.io/artifactory/oss-releases-local/org/artifactory/artifactory-papi/%5BRELEASE%5D/artifactory-papi-%5BRELEASE%5D-javadoc.jar!/org/artifactory/repo/Repositories.html
-[6] https://jfrog.com/help/r/artifactory-how-to-resolve-an-unable-to-find-valid-certification-path-to-requested-target-error/you-may-encounter-an-issue-when-trying-to-establish-a-trusted-ssl-connection-from-artifactory
-[7] https://jfrog.com/help/r/jfrog-rest-apis/get-folder-info
-[8] https://jfrog.com/help/r/artifactory-how-to-resolve-an-unable-to-find-valid-certification-path-to-requested-target-error
+```plaintext
+https://frigate.jfrog.io/.npm/ppa-fi-qsg-documentation-client/ppa-fi-qsg-documentation-client-1.0.1.json
+```
+
+The output would look like this:
+
+| repo_name               | package_type | package_name                      | version  | url                                                                                         | created_date              | license | secarch | artifactory_instance |
+|-------------------------|--------------|-----------------------------------|----------|---------------------------------------------------------------------------------------------|---------------------------|---------|---------|-----------------------|
+| npm-ppa-virtual         | npm          | ppa-fi-qsg-documentation-client  | 1.0.1    | https://frigate.jfrog.io/.npm/ppa-fi-qsg-documentation-client/ppa-fi-qsg-documentation-client-1.0.1.json | 2025-01-24T14:20:50.1234 |         |         | frigate.jfrog.io     |
+
+---
+
+### Next Steps:
+
+1. **Test the Script**:
+   - Run the script with your Artifactory instance.
+   - Verify the extracted `package_name` and `version` fields for npm artifacts.
+
+2. **Add Additional Parsing (if needed)**:
+   - Let me know if other repository types (e.g., Helm, Docker) require custom parsing logic.
+
+Let me know how it works for you! 😊
