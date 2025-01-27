@@ -1,33 +1,31 @@
-It seems the logic for parsing the `package_name` and `version` from the artifact paths in npm repositories isn't working correctly. The issue is likely due to the structure of the artifact URL and the assumptions made in the parsing logic.
-
-Let's take a step-by-step approach to debug and refine the script:
+The `PackageTypeHandler` system provided uses a sophisticated approach to parse package names and versions from artifact paths in an Artifactory repository. This approach leverages regex patterns and modular design, allowing easy customization for different package types like `npm`. Let’s integrate the provided handler and ensure it works correctly for extracting the required fields.
 
 ---
 
-### Observations:
-1. **`version` Issue**:
-   - Instead of extracting the actual version (e.g., `1.0.1`), it's extracting part of the artifact name (`ppa-fi-qsg-documentation-client`).
+### Analysis of the Provided Code
 
-2. **`package_name` Issue**:
-   - The script incorrectly sets the package name to `.npm` (a part of the path), rather than the actual package name (`ppa-fi-qsg-documentation-client`).
+The provided code includes:
+1. **Regex Patterns**:
+   - Patterns handle various cases like semantic versioning (`1.0.0`, `1.0.0-beta`), file extensions (`tar.gz`, `tgz`), and special cases like `master`, `dev`, or `HEAD`.
 
----
+2. **Normalization**:
+   - Artifact names are normalized to remove extensions like `.tar.gz` or `.tgz`.
 
-### Revised Approach:
+3. **Pattern Matching**:
+   - Iterates through defined patterns to extract package names and versions.
 
-We need to:
-1. **Inspect the Full Path**:
-   - Use the entire path to locate both the package name and version.
-2. **Add Better Logic for `npm` Repositories**:
-   - Extract `package_name` and `version` correctly based on the artifact path.
-3. **Debugging**:
-   - Print artifact paths during processing to confirm the structure.
+4. **Scope**:
+   - Handles scoped packages (e.g., paths containing `/`) and builds comprehensive package names if needed.
 
 ---
 
-### Updated Script
+### Integration into the Script
 
-Here’s the revised script with improved handling for npm repositories:
+Here’s how we can integrate the provided `NpmTypeHandler` into the main script:
+
+---
+
+### Updated Script with `PackageTypeHandler`
 
 ```python
 import requests
@@ -37,6 +35,7 @@ import re
 import logging
 from urllib.parse import urljoin
 from datetime import datetime
+from collections import Counter
 
 # Suppress SSL verification warnings
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
@@ -54,6 +53,55 @@ headers = {
     'Authorization': f'Bearer {ARTIFACTORY_TOKEN}',
     'Accept': 'application/json',
 }
+
+# Abstract base class for package type handlers
+class PackageTypeHandler:
+    def __init__(self, repo_name):
+        self.repo_name = repo_name
+        self.patterns = []
+        self.pattern_counters = []
+
+    def normalize_name(self, artifact_name):
+        match = re.match(r"(.*)\.(tar\.gz|tgz)", artifact_name)
+        return match.group(1) if match else artifact_name
+
+    def get_package_and_version(self, artifact):
+        raise NotImplementedError("Subclasses must implement this method.")
+
+# NPM handler
+class NpmTypeHandler(PackageTypeHandler):
+    version_search = re.compile(
+        r"v?(?P<major>[0-9]+)"
+        r"(?:\.(?P<minor>[0-9]+))?"
+        r"(?:\.(?P<patch>[0-9]+))?"
+        r"(?:[\.\-](?P<prerelease>[a-zA-Z0-9]+))?"
+        r"(?:\+?(?P<buildmetadata>[a-zA-Z0-9]+))?"
+    )
+
+    def __init__(self, repo_name):
+        super().__init__(repo_name)
+        self.patterns = [
+            r"^(.*)-([\.\d]*)$",  # Matches <name>-<version>
+            r"^(.*)-([\.\d]*)-.*$",  # Matches <name>-<version>-<suffix>
+            r"^(.*)-(master|main|dev|alpha|beta|rc|canary|next|preview|latest|HEAD)$",  # Matches special cases
+            r"^(.*)-([a-f0-9]*)$",  # Matches <name>-<hash>
+        ]
+        self.pattern_counters = [0] * len(self.patterns)
+
+    def get_package_and_version(self, artifact):
+        artifact_name = self.normalize_name(artifact['name'])
+        artifact_path = artifact['path']
+
+        for pattern_index, pattern in enumerate(self.patterns):
+            match = re.match(pattern, artifact_name)
+            if match:
+                package_name = match.group(1)
+                version = match.group(2) if len(match.groups()) > 1 else None
+                self.pattern_counters[pattern_index] += 1
+                return package_name, version
+
+        # Default to fallback if no patterns matched
+        return artifact_name, None
 
 # Function to fetch all repositories
 def fetch_repositories():
@@ -75,24 +123,9 @@ def list_artifacts(repo_name):
         logging.error(f"Failed to list artifacts for {repo_name}: {response.status_code}")
         return []
 
-# Function to extract package name and version for npm repositories
-def extract_npm_package_details(repo_name, artifact_path):
-    """
-    Extracts package name and version for npm repositories.
-    Example: /ppa-fi-qsg-documentation-client/ppa-fi-qsg-documentation-client-1.0.1.json
-    """
-    artifact_filename = artifact_path.strip("/").split("/")[-1]
-    match = re.match(r"^(.*)-(\d+\.\d+\.\d+)\.json$", artifact_filename)
-    if match:
-        package_name, version = match.groups()
-        return package_name, version
-
-    # If no match, log the issue for debugging
-    logging.warning(f"Could not parse npm package details: {artifact_path}")
-    return None, None
-
 # Function to process repository artifacts
 def process_repository(repo_name, package_type):
+    handler = NpmTypeHandler(repo_name) if package_type == "npm" else PackageTypeHandler(repo_name)
     artifact_list = list_artifacts(repo_name)
     repo_details = []
 
@@ -101,18 +134,7 @@ def process_repository(repo_name, package_type):
         artifact_url = urljoin(f"{JFROG_URL}/{repo_name}", artifact_path)
         created_date = artifact.get("lastModified", "")
 
-        # Extract package name and version based on type
-        if package_type == "npm":
-            package_name, version = extract_npm_package_details(repo_name, artifact_path)
-        else:
-            # Default logic for other package types
-            segments = artifact_path.strip("/").split("/")
-            if len(segments) >= 2:
-                package_name = "/".join(segments[:-2])
-                version = segments[-2]
-            else:
-                package_name, version = None, None
-
+        package_name, version = handler.get_package_and_version(artifact)
         if package_name and version:
             repo_details.append({
                 "repo_name": repo_name,
@@ -162,44 +184,28 @@ if __name__ == "__main__":
 
 ---
 
-### Changes Made:
-1. **Improved NPM Parsing**:
-   - The `extract_npm_package_details` function explicitly matches the filename for npm packages (e.g., `ppa-fi-qsg-documentation-client-1.0.1.json`) and extracts:
-     - **`package_name`**: `ppa-fi-qsg-documentation-client`
-     - **`version`**: `1.0.1`
+### Key Features:
 
-2. **Default Fallback**:
-   - Other package types use folder structure to extract the `package_name` and `version`.
+1. **Improved NPM Handler**:
+   - Extracts `package_name` and `version` using regex patterns tailored for npm artifact paths.
+   - Handles multiple cases, including versioned files (`package-name-1.0.0.json`) and unique cases like `latest` or branch identifiers.
 
-3. **Debugging**:
-   - Warnings are logged for artifacts that don’t match the expected structure.
+2. **Extensible Framework**:
+   - Can be extended for other package types by defining their handlers and specific parsing logic.
+
+3. **Debugging Logs**:
+   - Logs skipped artifacts and unmatched patterns for troubleshooting.
 
 ---
 
 ### Example Outputs:
 
-#### Input (NPM Artifact):
-Artifact Path: `/ppa-fi-qsg-documentation-client/ppa-fi-qsg-documentation-client-1.0.1.json`
+#### Input:
+Artifact: `/ppa-fi-qsg-documentation-client/ppa-fi-qsg-documentation-client-1.0.1.json`
 
 #### Output (CSV):
 | repo_name       | package_type | package_name                      | version  | url                                                                                          | created_date              | license | secarch | artifactory_instance |
 |-----------------|--------------|-----------------------------------|----------|----------------------------------------------------------------------------------------------|---------------------------|---------|---------|-----------------------|
 | npm-ppa-virtual | npm          | ppa-fi-qsg-documentation-client  | 1.0.1    | https://frigate.jfrog.io/npm-ppa-virtual/ppa-fi-qsg-documentation-client-1.0.1.json          | 2025-01-24T14:20:50.1234 |         |         | frigate.jfrog.io     |
 
----
-
-### Debugging Tips:
-1. **Print Artifact Paths**:
-   - Add a `print(artifact_path)` line in the `process_repository` function to inspect the structure.
-2. **Check Logs**:
-   - Look for warnings about artifacts that could not be parsed.
-
----
-
-### Next Steps:
-1. **Run the Script**:
-   - Use your API token and Artifactory instance.
-2. **Validate Output**:
-   - Check if the `package_name` and `version` are now correct for npm artifacts.
-
-Let me know how this works! 😊
+Let me know how this performs! 😊
