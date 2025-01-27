@@ -1,31 +1,8 @@
-The `PackageTypeHandler` system provided uses a sophisticated approach to parse package names and versions from artifact paths in an Artifactory repository. This approach leverages regex patterns and modular design, allowing easy customization for different package types like `npm`. Let’s integrate the provided handler and ensure it works correctly for extracting the required fields.
+Here’s the full script with all the necessary updates to handle package name and version extraction, including a default handler for unsupported types to avoid `NotImplementedError`.
 
 ---
 
-### Analysis of the Provided Code
-
-The provided code includes:
-1. **Regex Patterns**:
-   - Patterns handle various cases like semantic versioning (`1.0.0`, `1.0.0-beta`), file extensions (`tar.gz`, `tgz`), and special cases like `master`, `dev`, or `HEAD`.
-
-2. **Normalization**:
-   - Artifact names are normalized to remove extensions like `.tar.gz` or `.tgz`.
-
-3. **Pattern Matching**:
-   - Iterates through defined patterns to extract package names and versions.
-
-4. **Scope**:
-   - Handles scoped packages (e.g., paths containing `/`) and builds comprehensive package names if needed.
-
----
-
-### Integration into the Script
-
-Here’s how we can integrate the provided `NpmTypeHandler` into the main script:
-
----
-
-### Updated Script with `PackageTypeHandler`
+### Full Python Script
 
 ```python
 import requests
@@ -35,7 +12,6 @@ import re
 import logging
 from urllib.parse import urljoin
 from datetime import datetime
-from collections import Counter
 
 # Suppress SSL verification warnings
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
@@ -56,28 +32,41 @@ headers = {
 
 # Abstract base class for package type handlers
 class PackageTypeHandler:
+    """
+    Base class for all package type handlers.
+    Provides a default implementation for get_package_and_version.
+    """
     def __init__(self, repo_name):
         self.repo_name = repo_name
         self.patterns = []
-        self.pattern_counters = []
 
     def normalize_name(self, artifact_name):
-        match = re.match(r"(.*)\.(tar\.gz|tgz)", artifact_name)
+        """
+        Normalize artifact names by removing extensions like .tar.gz or .tgz.
+        """
+        match = re.match(r"(.*)\.(tar\.gz|tgz|json|zip|jar|nupkg)", artifact_name)
         return match.group(1) if match else artifact_name
 
     def get_package_and_version(self, artifact):
-        raise NotImplementedError("Subclasses must implement this method.")
+        """
+        Default implementation: Extracts the package name and version from artifact path.
+        Assumes the structure: <repo>/<package>/<version>/<file>.
+        """
+        artifact_path = artifact['path'].strip("/")
+        segments = artifact_path.split("/")
+        
+        if len(segments) >= 3:
+            # Generic logic: <repo>/<package>/<version>/<file>
+            package_name = "/".join(segments[:-2])
+            version = segments[-2]
+            return package_name, version
 
-# NPM handler
+        # If the structure doesn't match, return None
+        logging.warning(f"Could not extract package and version for artifact: {artifact_path}")
+        return None, None
+
+# NPM-specific handler
 class NpmTypeHandler(PackageTypeHandler):
-    version_search = re.compile(
-        r"v?(?P<major>[0-9]+)"
-        r"(?:\.(?P<minor>[0-9]+))?"
-        r"(?:\.(?P<patch>[0-9]+))?"
-        r"(?:[\.\-](?P<prerelease>[a-zA-Z0-9]+))?"
-        r"(?:\+?(?P<buildmetadata>[a-zA-Z0-9]+))?"
-    )
-
     def __init__(self, repo_name):
         super().__init__(repo_name)
         self.patterns = [
@@ -86,18 +75,15 @@ class NpmTypeHandler(PackageTypeHandler):
             r"^(.*)-(master|main|dev|alpha|beta|rc|canary|next|preview|latest|HEAD)$",  # Matches special cases
             r"^(.*)-([a-f0-9]*)$",  # Matches <name>-<hash>
         ]
-        self.pattern_counters = [0] * len(self.patterns)
 
     def get_package_and_version(self, artifact):
         artifact_name = self.normalize_name(artifact['name'])
-        artifact_path = artifact['path']
 
-        for pattern_index, pattern in enumerate(self.patterns):
+        for pattern in self.patterns:
             match = re.match(pattern, artifact_name)
             if match:
                 package_name = match.group(1)
                 version = match.group(2) if len(match.groups()) > 1 else None
-                self.pattern_counters[pattern_index] += 1
                 return package_name, version
 
         # Default to fallback if no patterns matched
@@ -125,6 +111,7 @@ def list_artifacts(repo_name):
 
 # Function to process repository artifacts
 def process_repository(repo_name, package_type):
+    # Use NpmTypeHandler for npm repositories; fallback to PackageTypeHandler otherwise
     handler = NpmTypeHandler(repo_name) if package_type == "npm" else PackageTypeHandler(repo_name)
     artifact_list = list_artifacts(repo_name)
     repo_details = []
@@ -134,6 +121,7 @@ def process_repository(repo_name, package_type):
         artifact_url = urljoin(f"{JFROG_URL}/{repo_name}", artifact_path)
         created_date = artifact.get("lastModified", "")
 
+        # Extract package name and version
         package_name, version = handler.get_package_and_version(artifact)
         if package_name and version:
             repo_details.append({
@@ -186,26 +174,24 @@ if __name__ == "__main__":
 
 ### Key Features:
 
-1. **Improved NPM Handler**:
-   - Extracts `package_name` and `version` using regex patterns tailored for npm artifact paths.
-   - Handles multiple cases, including versioned files (`package-name-1.0.0.json`) and unique cases like `latest` or branch identifiers.
+1. **NpmTypeHandler**:
+   - Custom regex patterns for npm artifacts like `package-name-1.0.0.json`.
 
-2. **Extensible Framework**:
-   - Can be extended for other package types by defining their handlers and specific parsing logic.
+2. **Fallback Handler**:
+   - The base `PackageTypeHandler` provides default behavior for unsupported types.
 
-3. **Debugging Logs**:
-   - Logs skipped artifacts and unmatched patterns for troubleshooting.
+3. **Debug Logging**:
+   - Logs skipped artifacts for better troubleshooting.
 
 ---
 
-### Example Outputs:
+### Usage:
 
-#### Input:
-Artifact: `/ppa-fi-qsg-documentation-client/ppa-fi-qsg-documentation-client-1.0.1.json`
+1. Replace `your_artifactory_api_token` with your actual JFrog API token.
+2. Run the script in Python:
+   ```bash
+   python jfrog_repo_parser.py
+   ```
+3. Check the generated CSV file in the same directory with a name like `EV_EOL_YYYY-MM-DD.csv`.
 
-#### Output (CSV):
-| repo_name       | package_type | package_name                      | version  | url                                                                                          | created_date              | license | secarch | artifactory_instance |
-|-----------------|--------------|-----------------------------------|----------|----------------------------------------------------------------------------------------------|---------------------------|---------|---------|-----------------------|
-| npm-ppa-virtual | npm          | ppa-fi-qsg-documentation-client  | 1.0.1    | https://frigate.jfrog.io/npm-ppa-virtual/ppa-fi-qsg-documentation-client-1.0.1.json          | 2025-01-24T14:20:50.1234 |         |         | frigate.jfrog.io     |
-
-Let me know how this performs! 😊
+Let me know how it performs! 😊
