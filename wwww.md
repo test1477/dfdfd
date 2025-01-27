@@ -1,8 +1,29 @@
-Sure! To leave fields like `license` and `secarch` blank instead of filling them with `"N/A"`, we can simply replace the `"N/A"` placeholders with an empty string (`""`). Here's the updated script:
+The issue arises because the current logic for extracting `package_name` and `version` is not tailored for the specific structure of npm artifacts in your repository. Specifically:
+
+1. **NPM Package Structure**:
+   - NPM URLs often include `.npm/<package-name>/<package-file>`.
+   - The `package_name` should be extracted from the `<package-name>` segment.
+   - The `version` should be extracted from the file name, typically formatted as `<package-name>-<version>.json`.
+
+2. **Incorrect Parsing**:
+   - The current script treats the segments leading up to `.npm` as the package name, which is incorrect.
+   - It also mistakenly treats the `<package-name>` as the version.
 
 ---
 
-### Updated Script with Blank Fields for Missing Data
+### Fix for Parsing NPM Package Names and Versions
+
+We need to:
+1. Identify URLs containing `.npm/`.
+2. Extract:
+   - **`package_name`**: The segment following `.npm/`.
+   - **`version`**: The version from the file name (e.g., `ppa-fi-qsg-documentation-client-1.0.1.json` → `1.0.1`).
+
+---
+
+### Updated Script for Correct NPM Parsing
+
+Here’s the revised script:
 
 ```python
 import requests
@@ -10,6 +31,7 @@ import csv
 import warnings
 from urllib.parse import urljoin
 from datetime import datetime
+import re  # For regex to parse versions
 
 # Suppress SSL verification warnings
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
@@ -53,7 +75,29 @@ def list_artifacts(repo_name):
         print(f"Failed to list artifacts for {repo_name}: {response.status_code}")
         return []
 
-# Function to process repository artifacts without extra API calls
+# Function to parse package name and version
+def parse_artifact_details(repo_name, artifact_path, package_type):
+    """
+    Extracts package_name and version based on repository structure and type.
+    """
+    artifact_path = artifact_path.strip("/")
+    if package_type == "npm" and ".npm/" in artifact_path:
+        # Special handling for npm artifacts
+        match = re.search(r"\.npm/([^/]+)/([^/]+)-([\d\.]+)\.json", artifact_path)
+        if match:
+            package_name = match.group(1)  # Extract package name
+            version = match.group(3)  # Extract version
+            return package_name, version
+    else:
+        # Generic parsing for other types
+        segments = artifact_path.split("/")
+        if len(segments) >= 2:
+            package_name = f"{repo_name}/{'/'.join(segments[:-2])}"
+            version = segments[-2]
+            return package_name, version
+    return repo_name, ""  # Default if parsing fails
+
+# Function to process repository artifacts
 def process_repository(repo_name, package_type):
     """
     Processes all artifacts in a repository using batch metadata from the recursive listing.
@@ -66,14 +110,8 @@ def process_repository(repo_name, package_type):
         artifact_url = urljoin(f"{JFROG_URL}/{repo_name}", artifact_path)
         created_date = artifact.get("lastModified", "")
 
-        # Parse package name and version from artifact path
-        segments = artifact_path.strip("/").split("/")
-        if len(segments) >= 2:
-            package_name = f"{repo_name}/{'/'.join(segments[:-2])}"  # Up to the version folder
-            version = segments[-2]  # Second-to-last segment
-        else:
-            package_name = repo_name
-            version = ""
+        # Parse package name and version
+        package_name, version = parse_artifact_details(repo_name, artifact_path, package_type)
 
         # Append details
         repo_details.append({
@@ -117,7 +155,7 @@ def main():
         package_type = repo.get("packageType", "")  # Dynamically fetch the package type
         print(f"Processing repository: {repo_name} (Type: {package_type})")
         
-        # Process repository artifacts in batches
+        # Process repository artifacts
         repo_details = process_repository(repo_name, package_type)
         all_repo_details.extend(repo_details)
 
@@ -132,35 +170,41 @@ if __name__ == '__main__':
 
 ---
 
-### Key Changes:
+### Key Updates:
 
-1. **Blank Fields for Missing Data**:
-   - `license` and `secarch` are now set to `""` (blank) instead of `"N/A"`.
-   - The `created_date` and `version` fields also default to `""` if no value is available.
+1. **Special Parsing for NPM Artifacts**:
+   - For paths containing `.npm/`, the script uses a regular expression to extract:
+     - `package_name`: The segment immediately following `.npm/`.
+     - `version`: Extracted from the file name (e.g., `ppa-fi-qsg-documentation-client-1.0.1.json` → `1.0.1`).
 
-2. **Dynamic File Name**:
-   - Output file is still named as `EV_EOL_<current_date>.csv`.
+2. **Generic Parsing for Other Types**:
+   - Artifacts not under `.npm/` use the generic parsing logic.
 
----
-
-### Example Output:
-
-#### CSV File: `EV_EOL_2025-01-24.csv`
-
-| repo_name               | package_type | package_name                                | version  | url                                                                                           | created_date              | license | secarch | artifactory_instance |
-|-------------------------|--------------|---------------------------------------------|----------|-----------------------------------------------------------------------------------------------|---------------------------|---------|---------|-----------------------|
-| msartaz-train-docker-pr | Docker       | msartaz-train-docker-pr/ace-test/test-github-java | 1.0.18   | https://frigate.jfrog.io/artifactory/msartaz-train-docker-pr/ace-test/test-github-java/1.0.18/sha256.marker | 2024-05-01T17:45:42.3832 |         |         | frigate.jfrog.io     |
-| npm-ppa-virtual         | npm          | npm-ppa-virtual/ppa-fip-security-documentation-client | 2.3.0    | https://frigate.jfrog.io/artifactory/npm-ppa-virtual/ppa-fip-security-documentation-client/2.3.0/client-2.3.0.tgz | 2024-01-15T14:20:50.1234 |         |         | frigate.jfrog.io     |
+3. **Dynamic Package Type Handling**:
+   - The `package_type` is dynamically passed into `parse_artifact_details` for type-specific parsing.
 
 ---
 
-### Next Steps:
+### Example Input and Output:
 
-1. **Test the Script**:
-   - Replace `your_artifactory_api_token` with your actual API token.
-   - Run the script and verify the generated CSV file.
+#### Input NPM Artifact:
+```plaintext
+.npm/ppa-fi-qsg-documentation-client/ppa-fi-qsg-documentation-client-1.0.1.json
+```
 
-2. **Adjust Metadata Mapping**:
-   - If `license` or `secarch` data becomes available in the future, update the script to populate these fields dynamically.
+#### Parsed Output:
+| repo_name          | package_type | package_name                     | version  | url                                                                                   | created_date              | license | secarch | artifactory_instance |
+|--------------------|--------------|-----------------------------------|----------|---------------------------------------------------------------------------------------|---------------------------|---------|---------|-----------------------|
+| npm-ppa-virtual    | npm          | ppa-fi-qsg-documentation-client  | 1.0.1    | https://frigate.jfrog.io/artifactory/npm-ppa-virtual/.npm/ppa-fi-qsg-documentation-client/ppa-fi-qsg-documentation-client-1.0.1.json | 2024-01-15T14:20:50.1234 |         |         | frigate.jfrog.io     |
 
-Let me know if you need any further customization! 😊
+---
+
+### Testing:
+1. **Run the Script**:
+   - Replace `your_artifactory_api_token` with your actual token.
+   - Verify that the `package_name` and `version` fields are parsed correctly for NPM repositories.
+
+2. **Provide Additional Examples**:
+   - Share other repository structures if any further adjustments are needed. 
+
+Let me know if this resolves the issue! 😊
