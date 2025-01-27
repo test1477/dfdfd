@@ -1,181 +1,235 @@
-The provided code introduces a robust and extensible `PackageTypeHandler` system, complete with an implementation for `NpmTypeHandler`, capable of handling package name and version parsing with advanced exclusion and normalization logic. Let's integrate this system into the main script while ensuring compatibility with the existing flow.
+Here's a Python script that fetches artifacts for **all repositories** in a JFrog Artifactory instance using the JFrog REST API. The script retrieves repository names and iterates through them to fetch artifact metadata for each repository.
 
 ---
 
-### Updated Script with `PackageTypeHandler` Integration
-
-This script integrates the `PackageTypeHandler` and `NpmTypeHandler` you provided and uses them to process artifacts in Artifactory repositories. It includes:
-1. **Exclusion Logic**: Based on paths and extensions.
-2. **Customizable Parsing**: Specific for npm packages and extensible for other package types.
+### Complete Script: Fetch Artifacts from All Repositories in JFrog Artifactory
 
 ```python
+import os
 import requests
-import csv
-import warnings
-import re
 import logging
-from urllib.parse import urljoin
+import csv
 from datetime import datetime
-from collections import Counter
 
-# Suppress SSL verification warnings
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
-warnings.simplefilter('ignore', InsecureRequestWarning)
 
-# JFrog Artifactory instance details
-JFROG_URL = 'https://frigate.jfrog.io/artifactory'  # Base URL for JFrog
-ARTIFACTORY_TOKEN = 'your_artifactory_api_token'  # Replace with your API token
+class ArtifactoryClient:
+    def __init__(self, artifactory_url, token):
+        """
+        Initialize the Artifactory client.
 
-# Headers for the API request
-headers = {
-    'Authorization': f'Bearer {ARTIFACTORY_TOKEN}',
-    'Accept': 'application/json',
-}
+        Args:
+            artifactory_url (str): The base URL of the Artifactory instance.
+            token (str): The authentication token for accessing Artifactory.
+        """
+        self.artifactory_url = artifactory_url.rstrip("/")
+        self.token = token
+        self.headers = {"Authorization": f"Bearer {self.token}"}
 
-# Abstract class for package type handlers
-class PackageTypeHandler:
-    def __init__(self, artifactory, repository, path):
-        self.artifactory = artifactory
-        self.repository = repository
-        self.path = path
-        self.excluded_by_path = Counter()
-        self.excluded_by_ext = Counter()
-        self.errors = Counter()
+    def get_repositories(self):
+        """
+        Fetch all repositories from the Artifactory instance.
 
-    def process(self, artifacts) -> list:
-        axs = []
-        for artifact in artifacts:
-            if not self.exclude(self.repository, artifact):
-                package, version = self.get_package_and_version(self.repository, artifact)
-                if package is None or version is None:
-                    logging.error(
-                        f"Failed to process artifact path: {artifact['uri']} in repository key: {self.repository}"
-                    )
-                    self.errors.update({"error": 1})
-                else:
-                    axs.append({
-                        "package_name": package,
-                        "version": version,
-                        "package_type": self.repository.get("packageType", ""),
-                        "url": artifact.get("uri", ""),
-                        "creation_date": artifact.get("lastModified", ""),
-                        "license": "",
-                        "secarch": "",
-                        "repo_name": self.repository,
-                        "artifactory_instance": "frigate.jfrog.io",
+        Returns:
+            list[str]: A list of repository names.
+        """
+        url = f"{self.artifactory_url}/api/repositories"
+        response = requests.get(url, headers=self.headers)
+
+        if response.status_code != 200:
+            logging.error(f"Failed to fetch repositories: {response.status_code} - {response.text}")
+            return []
+
+        repos = [repo["key"] for repo in response.json()]
+        logging.info(f"Fetched {len(repos)} repositories.")
+        return repos
+
+    def get_artifacts(self, repo_name):
+        """
+        Fetch artifacts for a specific repository.
+
+        Args:
+            repo_name (str): The name of the repository in Artifactory.
+
+        Returns:
+            list[dict]: A list of artifacts with their details.
+        """
+        url = f"{self.artifactory_url}/api/storage/{repo_name}"
+        response = requests.get(url, headers=self.headers)
+
+        if response.status_code != 200:
+            logging.error(f"Failed to fetch artifacts for repo '{repo_name}': {response.status_code} - {response.text}")
+            return []
+
+        artifacts = self._extract_artifacts(response.json())
+        return artifacts
+
+    def _extract_artifacts(self, response_json):
+        """
+        Extract artifact details from the API response.
+
+        Args:
+            response_json (dict): JSON response from Artifactory API.
+
+        Returns:
+            list[dict]: Extracted artifact details.
+        """
+        artifacts = []
+        if "children" in response_json:
+            for child in response_json["children"]:
+                if not child["uri"].endswith("/"):  # Ignore directories
+                    artifact_url = f"{response_json['uri']}{child['uri']}"
+                    artifacts.append({
+                        "url": artifact_url,
+                        "path": child["uri"],
+                        "name": os.path.basename(child["uri"]),
+                        "created": datetime.now().isoformat(),  # Replace with actual creation date if available
                     })
-        return axs
+        return artifacts
 
-    def exclude(self, repository, artifact) -> bool:
-        return False  # Override this logic if needed
 
-    def get_package_and_version(self, repository, artifact) -> tuple:
-        raise NotImplementedError("This method should be overridden in the subclass.")
+class CSVReporter:
+    def __init__(self, filename, headers):
+        """
+        Initialize a CSV reporter to write artifact data.
 
-# Handler for npm repositories
-class NpmTypeHandler(PackageTypeHandler):
-    version_search = re.compile(
-        r"v?(?P<major>[0-9]+)"
-        r"(?:\.(?P<minor>[0-9]+))?"
-        r"(?:\.(?P<patch>[0-9]+))?"
-        r"(?:[\.\-](?P<prerelease>[a-zA-Z0-9]+))?"
-        r"(?:\+?(?P<buildmetadata>[a-zA-Z0-9]+))?"
-    )
+        Args:
+            filename (str): The CSV file path.
+            headers (list): A list of column headers for the CSV file.
+        """
+        self.filename = filename
+        self.headers = headers
 
-    def __init__(self, artifactory, repository, path):
-        super().__init__(artifactory, repository, path)
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
 
-    def get_package_and_version(self, repository, artifact):
-        artifact_filename = artifact['uri'].strip("/").split("/")[-1]
-        match = re.match(r"^(.*)-(\d+\.\d+\.\d+)\.json$", artifact_filename)
-        if match:
-            return match.groups()
-        return None, None
+        # Open the file for writing
+        self.file = open(filename, mode="w", newline="", encoding="utf-8")
+        self.writer = csv.DictWriter(self.file, fieldnames=headers)
+        self.writer.writeheader()
 
-# Function to fetch all repositories
-def fetch_repositories():
-    url = f"{JFROG_URL}/api/repositories"
-    response = requests.get(url, headers=headers, verify=False)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Failed to fetch repositories: {response.status_code}")
-        return []
+    def write_row(self, row):
+        """Write a single row to the CSV file."""
+        self.writer.writerow(row)
 
-# Function to list all artifacts in a repository
-def list_artifacts(repo_name):
-    url = f"{JFROG_URL}/api/storage/{repo_name}?list&deep=1"
-    response = requests.get(url, headers=headers, verify=False)
-    if response.status_code == 200:
-        return response.json().get("files", [])
-    else:
-        print(f"Failed to list artifacts for {repo_name}: {response.status_code}")
-        return []
+    def close(self):
+        """Close the CSV file."""
+        self.file.close()
 
-# Main function to process repositories
-def main():
-    repositories = fetch_repositories()
-    all_repo_details = []
-
-    for repo in repositories:
-        repo_name = repo.get("key")
-        package_type = repo.get("packageType", "")
-        print(f"Processing repository: {repo_name} (Type: {package_type})")
-
-        # Select appropriate handler
-        if package_type == "npm":
-            handler = NpmTypeHandler(JFROG_URL, repo, repo_name)
-        else:
-            handler = PackageTypeHandler(JFROG_URL, repo, repo_name)
-
-        # Fetch artifacts and process them
-        artifacts = list_artifacts(repo_name)
-        repo_details = handler.process(artifacts)
-        all_repo_details.extend(repo_details)
-
-    # Save to CSV
-    current_date = datetime.now().strftime('%Y-%m-%d')
-    output_file = f"EV_EOL_{current_date}.csv"
-    save_to_csv(all_repo_details, output_file)
-
-def save_to_csv(data, filename):
-    headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'creation_date', 'license', 'secarch', 'artifactory_instance']
-    with open(filename, mode='w', newline='', encoding='utf-8') as file:
-        writer = csv.DictWriter(file, fieldnames=headers)
-        writer.writeheader()
-        writer.writerows(data)
-    print(f"Data written to {filename}")
 
 if __name__ == "__main__":
-    main()
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+
+    # Fetch environment variables for Artifactory URL and Token
+    ARTIFACTORY_URL = os.environ.get("ARTIFACTORY_URL", "https://example.jfrog.io/artifactory")
+    ARTIFACTORY_TOKEN = os.environ.get("ARTIFACTORY_TOKEN")
+
+    if not ARTIFACTORY_TOKEN:
+        raise ValueError("ARTIFACTORY_TOKEN is not set. Please export it as an environment variable.")
+
+    # Initialize Artifactory client
+    client = ArtifactoryClient(ARTIFACTORY_URL, ARTIFACTORY_TOKEN)
+
+    # Fetch all repositories
+    repositories = client.get_repositories()
+
+    # Initialize CSV Reporter
+    output_file = "output/all_artifacts_report.csv"
+    reporter = CSVReporter(
+        output_file,
+        headers=[
+            "repo_name",
+            "package_type",
+            "package_name",
+            "version",
+            "url",
+            "creation_date",
+            "license",
+            "secarch",
+            "artifactory_instance",
+        ],
+    )
+
+    # Fetch artifacts for all repositories and write to the CSV
+    for repo in repositories:
+        logging.info(f"Processing repository: {repo}")
+        artifacts = client.get_artifacts(repo)
+
+        for artifact in artifacts:
+            # Extract package name and version from the artifact URL (if applicable)
+            package_name, version = None, None
+            match = re.match(r".*/(?P<package>.+)-(?P<version>[0-9\.]+)\.[a-zA-Z0-9]+$", artifact["url"])
+            if match:
+                package_name = match.group("package")
+                version = match.group("version")
+
+            # Write the artifact data to the CSV file
+            reporter.write_row({
+                "repo_name": repo,
+                "package_type": "Generic",  # Adjust this if package type can be determined
+                "package_name": package_name or artifact["name"],
+                "version": version or "N/A",
+                "url": artifact["url"],
+                "creation_date": artifact["created"],
+                "license": "",  # Placeholder
+                "secarch": "",  # Placeholder
+                "artifactory_instance": ARTIFACTORY_URL,
+            })
+
+    # Close the CSV file
+    reporter.close()
+
+    logging.info(f"Artifact report generated: {output_file}")
+```
+
+---
+
+### How It Works:
+
+1. **Fetch Repositories:**
+   - Uses the JFrog API (`/api/repositories`) to fetch all repository names in the Artifactory instance.
+
+2. **Fetch Artifacts:**
+   - Iterates over each repository and fetches artifact details using the `/api/storage/{repo_name}` endpoint.
+
+3. **Extract Package Details:**
+   - Parses artifact URLs to extract `package_name` and `version` where applicable (e.g., `package-1.0.0.tar.gz`).
+
+4. **CSV Report:**
+   - Writes the results to a CSV file (`output/all_artifacts_report.csv`) with the specified columns.
+
+---
+
+### Setup:
+1. Export environment variables for Artifactory URL and token:
+   ```bash
+   export ARTIFACTORY_URL="https://your-artifactory-instance.jfrog.io/artifactory"
+   export ARTIFACTORY_TOKEN="your_api_token_here"
+   ```
+
+2. Run the script:
+   ```bash
+   python artifactory_fetch_all.py
+   ```
+
+---
+
+### Sample Output (CSV):
+Example CSV output for two repositories:
+
+```csv
+repo_name,package_type,package_name,version,url,creation_date,license,secarch,artifactory_instance
+repo1,Generic,package1,1.0.0,https://example.jfrog.io/artifactory/repo1/path/to/package1-1.0.0.tar.gz,2025-01-27T12:00:00,,,
+repo2,Generic,package2,2.0.0,https://example.jfrog.io/artifactory/repo2/path/to/package2-2.0.0.zip,2025-01-27T12:00:00,,,
 ```
 
 ---
 
 ### Key Features:
-1. **Custom Handlers**:
-   - `NpmTypeHandler` specifically handles npm repository artifacts and extracts package names and versions.
-   - Base `PackageTypeHandler` can be extended for other types in the future.
+1. **Handles All Repositories:** Automatically retrieves all repositories.
+2. **Artifact Filtering:** Only includes non-directory artifacts in the report.
+3. **CSV Report:** Writes all artifact details to a CSV file.
+4. **Error Handling:** Logs errors if API requests fail.
+5. **Dynamic Configuration:** Reads `ARTIFACTORY_URL` and `ARTIFACTORY_TOKEN` from environment variables for security.
 
-2. **Error Handling**:
-   - Tracks errors and excluded files for better debugging.
-
-3. **Dynamic Handler Assignment**:
-   - Automatically assigns the correct handler based on the repository's `packageType`.
-
----
-
-### Expected Output:
-
-#### Input:
-- Repository: `npm-ppa-virtual`
-- Artifact: `/ppa-fi-qsg-documentation-client/ppa-fi-qsg-documentation-client-1.0.1.json`
-
-#### Output:
-| repo_name       | package_type | package_name                      | version  | url                                                                                          | creation_date              | license | secarch | artifactory_instance |
-|-----------------|--------------|-----------------------------------|----------|----------------------------------------------------------------------------------------------|---------------------------|---------|---------|-----------------------|
-| npm-ppa-virtual | npm          | ppa-fi-qsg-documentation-client  | 1.0.1    | https://frigate.jfrog.io/npm-ppa-virtual/ppa-fi-qsg-documentation-client/ppa-fi-qsg-documentation-client-1.0.1.json | 2025-01-24T14:20:50.1234 |         |         | frigate.jfrog.io     |
-
----
-
-Let me know how it performs and if further refinements are needed! 😊
+Let me know if you'd like further customization!
