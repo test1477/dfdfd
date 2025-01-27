@@ -1,41 +1,23 @@
-If the script is taking significantly longer to execute compared to the earlier version, the issue is likely related to the following:
-
-1. **Fetching Metadata for Each Artifact**:
-   - For every artifact, the script makes a separate API call to fetch metadata using `/api/storage/<repo_name>/<artifact_path>`.
-   - This can drastically increase execution time, especially for repositories with a large number of artifacts.
-
-2. **Excessive API Requests**:
-   - The increased number of requests to the Artifactory API may cause delays due to network latency or API rate limits.
-
-3. **Recursive Artifact Listing**:
-   - If a repository contains a large number of artifacts or deeply nested structures, the recursive listing (`list&deep=1`) can contribute to the delay.
+To include additional fields like `license` and `secarch` in the output, as well as save the file with the name format `EV_EOL_<current_date>.csv`, we can make the following updates:
 
 ---
 
-### Optimizations to Reduce Execution Time
+### Updated Script
 
-To improve the performance of the script:
-
-1. **Batch Metadata Fetching**:
-   - Instead of fetching metadata for each artifact, rely on the metadata returned by the recursive listing (`?list&deep=1`) API. This will eliminate the need for additional API calls.
-
-2. **Skip Unnecessary Fields**:
-   - Extract only the required details (e.g., `artifact_path`, `created_date`) directly from the recursive listing response.
-
-3. **Parallelize API Requests**:
-   - Use Python's `concurrent.futures` or `asyncio` to fetch data concurrently, reducing the total runtime.
+This version:
+1. **Includes `license` and `secarch`**:
+   - These fields can be placeholders (`"N/A"`) if they are unavailable in the metadata.
+2. **Dynamically Saves the Output File**:
+   - The file is saved as `EV_EOL_<current_date>.csv`.
 
 ---
-
-### Optimized Script: Batch Metadata Processing
-
-Here’s an updated script that processes metadata in batches by relying on the recursive listing:
 
 ```python
 import requests
 import csv
 import warnings
 from urllib.parse import urljoin
+from datetime import datetime
 
 # Suppress SSL verification warnings
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
@@ -109,17 +91,19 @@ def process_repository(repo_name, package_type):
             "version": version,
             "url": artifact_url,
             "created_date": created_date,
+            "license": "N/A",  # Placeholder, adjust if license data is available
+            "secarch": "N/A",  # Placeholder, adjust if secarch data is available
             "artifactory_instance": "frigate.jfrog.io"
         })
     
     return repo_details
 
 # Function to save data to CSV
-def save_to_csv(data, filename='jfrog_artifact_metadata.csv'):
+def save_to_csv(data, filename):
     """
     Saves extracted metadata to a CSV file.
     """
-    headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'artifactory_instance']
+    headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'license', 'secarch', 'artifactory_instance']
     
     with open(filename, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=headers)
@@ -145,8 +129,10 @@ def main():
         repo_details = process_repository(repo_name, package_type)
         all_repo_details.extend(repo_details)
 
-    # Save all details to CSV
-    save_to_csv(all_repo_details)
+    # Save all details to CSV with a dynamic file name
+    current_date = datetime.now().strftime('%Y-%m-%d')  # Current date in YYYY-MM-DD format
+    output_file = f"EV_EOL_{current_date}.csv"
+    save_to_csv(all_repo_details, output_file)
 
 if __name__ == '__main__':
     main()
@@ -154,35 +140,50 @@ if __name__ == '__main__':
 
 ---
 
-### Key Improvements:
+### Key Updates:
+1. **`license` and `secarch` Fields**:
+   - Added placeholders for `license` and `secarch` in the output.
+   - If data for these fields is available in the artifact metadata, the script can be enhanced to fetch and populate them dynamically.
 
-1. **Batch Metadata Fetching**:
-   - The script relies entirely on the `?list&deep=1` endpoint to fetch artifact details in bulk, avoiding the need for separate API calls for each artifact.
+2. **Dynamic File Naming**:
+   - The output file name is now dynamically generated as `EV_EOL_<current_date>.csv`, where `<current_date>` is in the format `YYYY-MM-DD`.
 
-2. **Eliminated Per-Artifact Metadata Calls**:
-   - No more `/api/storage/<repo_name>/<artifact_path>` calls for each artifact. This reduces API overhead significantly.
-
-3. **Faster Execution**:
-   - The script processes metadata directly from the recursive listing response, cutting down execution time for large repositories.
+3. **Efficient Metadata Handling**:
+   - Uses batch metadata processing via the `?list&deep=1` API endpoint for faster execution.
 
 ---
 
-### Expected Runtime:
+### Output Example:
 
-- This optimized script should reduce execution time significantly, bringing it closer to your earlier runtime of ~5 minutes, depending on the number of artifacts.
+#### Input Repository Structure:
+```plaintext
+msartaz-train-docker-pr/
+    ace-test/
+        test-github-java/
+            1.0.18/
+                sha256.marker
+npm-ppa-virtual/
+    ppa-fip-security-documentation-client/
+        2.3.0/
+            client-2.3.0.tgz
+```
+
+#### Generated CSV:
+File Name: `EV_EOL_2025-01-24.csv`
+
+| repo_name               | package_type | package_name                                | version  | url                                                                                           | created_date              | license | secarch | artifactory_instance |
+|-------------------------|--------------|---------------------------------------------|----------|-----------------------------------------------------------------------------------------------|---------------------------|---------|---------|-----------------------|
+| msartaz-train-docker-pr | Docker       | msartaz-train-docker-pr/ace-test/test-github-java | 1.0.18   | https://frigate.jfrog.io/artifactory/msartaz-train-docker-pr/ace-test/test-github-java/1.0.18/sha256.marker | 2024-05-01T17:45:42.3832 | N/A     | N/A     | frigate.jfrog.io     |
+| npm-ppa-virtual         | npm          | npm-ppa-virtual/ppa-fip-security-documentation-client | 2.3.0    | https://frigate.jfrog.io/artifactory/npm-ppa-virtual/ppa-fip-security-documentation-client/2.3.0/client-2.3.0.tgz | 2024-01-15T14:20:50.1234 | N/A     | N/A     | frigate.jfrog.io     |
 
 ---
 
 ### Next Steps:
+1. **Run the Script**:
+   - Replace `your_artifactory_api_token` with your JFrog API token.
+   - Execute the script and check the generated file.
 
-1. **Test the Script**:
-   - Replace `your_artifactory_api_token` with your actual API token.
-   - Run the script and verify the runtime and output.
+2. **Populate `license` and `secarch`**:
+   - If `license` or `secarch` is part of the metadata, we can adjust the script to include it.
 
-2. **Check the CSV Output**:
-   - Ensure that the `package_name`, `version`, and other fields are extracted correctly.
-
-3. **Parallelize for Further Optimization** (Optional):
-   - If needed, I can help you parallelize repository processing using Python's `concurrent.futures`.
-
-Let me know how the optimized script works for you!
+Let me know if you need further adjustments!
