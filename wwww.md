@@ -1,10 +1,4 @@
-To address this issue and properly handle npm package artifacts (like `ppa-fi-qsg-documentation-client-1.0.1.json`), we can implement a **package type handler** similar to the logic you provided. This involves creating a specific handler class for npm repositories that applies custom parsing logic to extract the **package name** and **version**.
-
-Here's an implementation that incorporates your ideas while ensuring flexibility for other package types.
-
----
-
-### Updated Script with a Package Type Handler
+Certainly! Here's the full updated script incorporating the changes to improve package name and version extraction for different package types:
 
 ```python
 import requests
@@ -12,7 +6,6 @@ import csv
 import warnings
 from urllib.parse import urljoin
 from datetime import datetime
-import re
 
 # Suppress SSL verification warnings
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
@@ -28,74 +21,71 @@ headers = {
     'Accept': 'application/json',
 }
 
-# Abstract class for package type handlers
-class PackageTypeHandler:
-    def __init__(self, repo_name, artifact_path):
-        self.repo_name = repo_name
-        self.artifact_path = artifact_path
-
-    def get_package_and_version(self):
-        """
-        Abstract method to be implemented by specific package type handlers.
-        """
-        raise NotImplementedError("This method should be overridden in the subclass.")
-
-# Handler for npm repositories
-class NpmTypeHandler(PackageTypeHandler):
-    def get_package_and_version(self):
-        """
-        Extract package name and version for npm artifacts.
-        Example: ppa-fi-qsg-documentation-client-1.0.1.json
-        """
-        artifact_filename = self.artifact_path.strip("/").split("/")[-1]
-        match = re.match(r"^(.*)-(\d+\.\d+\.\d+)\.json$", artifact_filename)
-        if match:
-            package_name, version = match.groups()
-            return package_name, version
-        return "", ""  # Return empty strings if no match is found
-
-# Handler for other repository types (default)
-class DefaultTypeHandler(PackageTypeHandler):
-    def get_package_and_version(self):
-        """
-        Default logic for extracting package name and version.
-        Uses the directory structure of the artifact path.
-        """
-        segments = self.artifact_path.strip("/").split("/")
-        if len(segments) >= 2:
-            package_name = f"{self.repo_name}/{'/'.join(segments[:-2])}"
-            version = segments[-2]
-            return package_name, version
-        return self.repo_name, ""
-
-# Factory function to get the appropriate handler
-def get_handler(repo_name, artifact_path, package_type):
-    if package_type == "npm":
-        return NpmTypeHandler(repo_name, artifact_path)
-    return DefaultTypeHandler(repo_name, artifact_path)
-
-# Function to fetch all repositories
 def fetch_repositories():
+    """
+    Fetches a list of all repositories in the Artifactory instance.
+    """
     url = f"{JFROG_URL}/api/repositories"
     response = requests.get(url, headers=headers, verify=False)
+
     if response.status_code == 200:
         return response.json()
     else:
         print(f"Failed to fetch repositories: {response.status_code}")
         return []
 
-# Function to list all artifacts in a repository
 def list_artifacts(repo_name):
+    """
+    Recursively fetches all artifacts in the specified repository.
+    """
     url = f"{JFROG_URL}/api/storage/{repo_name}?list&deep=1"
     response = requests.get(url, headers=headers, verify=False)
+
     if response.status_code == 200:
         return response.json().get("files", [])
     else:
         print(f"Failed to list artifacts for {repo_name}: {response.status_code}")
         return []
 
-# Function to process repository artifacts
+def extract_package_info(artifact_path, package_type, repo_name):
+    segments = artifact_path.strip("/").split("/")
+    
+    if package_type == "npm":
+        if len(segments) >= 3:
+            package_name = segments[0] if not segments[0].startswith("@") else f"{segments[0]}/{segments[1]}"
+            version = segments[-2]
+        else:
+            package_name = repo_name
+            version = segments[-1] if segments else ""
+    elif package_type == "maven":
+        if len(segments) >= 3:
+            package_name = ".".join(segments[:-2])
+            version = segments[-2]
+        else:
+            package_name = repo_name
+            version = segments[-1] if segments else ""
+    elif package_type == "docker":
+        if len(segments) >= 2:
+            package_name = "/".join(segments[:-1])
+            version = segments[-1]
+        else:
+            package_name = repo_name
+            version = ""
+    else:
+        # Default handling for other package types
+        if len(segments) >= 2:
+            package_name = "/".join(segments[:-1])
+            version = segments[-1]
+        else:
+            package_name = repo_name
+            version = ""
+    
+    return package_name, version
+
 def process_repository(repo_name, package_type):
+    """
+    Processes all artifacts in a repository using batch metadata from the recursive listing.
+    """
     artifact_list = list_artifacts(repo_name)
     repo_details = []
 
@@ -104,11 +94,8 @@ def process_repository(repo_name, package_type):
         artifact_url = urljoin(f"{JFROG_URL}/{repo_name}", artifact_path)
         created_date = artifact.get("lastModified", "")
 
-        # Use the appropriate handler to extract package name and version
-        handler = get_handler(repo_name, artifact_path, package_type)
-        package_name, version = handler.get_package_and_version()
+        package_name, version = extract_package_info(artifact_path, package_type, repo_name)
 
-        # Append details
         repo_details.append({
             "repo_name": repo_name,
             "package_type": package_type,
@@ -123,17 +110,23 @@ def process_repository(repo_name, package_type):
     
     return repo_details
 
-# Function to save data to CSV
 def save_to_csv(data, filename):
+    """
+    Saves extracted metadata to a CSV file.
+    """
     headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'license', 'secarch', 'artifactory_instance']
+    
     with open(filename, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=headers)
         writer.writeheader()
         writer.writerows(data)
+    
     print(f"Data has been written to {filename}")
 
-# Main function to process all repositories
 def main():
+    """
+    Main function to process all repositories and extract metadata.
+    """
     repositories = fetch_repositories()
     all_repo_details = []
 
@@ -142,12 +135,12 @@ def main():
         package_type = repo.get("packageType", "")  # Dynamically fetch the package type
         print(f"Processing repository: {repo_name} (Type: {package_type})")
         
-        # Process repository artifacts
+        # Process repository artifacts in batches
         repo_details = process_repository(repo_name, package_type)
         all_repo_details.extend(repo_details)
 
     # Save all details to CSV with a dynamic file name
-    current_date = datetime.now().strftime('%Y-%m-%d')
+    current_date = datetime.now().strftime('%Y-%m-%d')  # Current date in YYYY-MM-DD format
     output_file = f"EV_EOL_{current_date}.csv"
     save_to_csv(all_repo_details, output_file)
 
@@ -155,39 +148,17 @@ if __name__ == '__main__':
     main()
 ```
 
----
+This script includes the following key features:
 
-### Key Changes:
+1. Fetches all repositories from the JFrog Artifactory instance.
+2. Processes each repository, extracting metadata for all artifacts.
+3. Handles package name and version extraction differently for npm, Maven, Docker, and other package types.
+4. Saves the extracted data to a CSV file with a date-stamped filename.
 
-1. **Handler Classes**:
-   - `NpmTypeHandler`:
-     - Specifically designed to handle npm repositories.
-     - Extracts `package_name` and `version` using a regex (`^(.*)-(\d+\.\d+\.\d+)\.json$`).
-   - `DefaultTypeHandler`:
-     - Handles all other package types using the default folder structure logic.
+To use this script:
 
-2. **Factory Function**:
-   - `get_handler(repo_name, artifact_path, package_type)` dynamically selects the appropriate handler based on the `package_type`.
+1. Replace `'your_artifactory_api_token'` with your actual JFrog Artifactory API token.
+2. Ensure you have the `requests` library installed (`pip install requests`).
+3. Run the script in a Python environment.
 
-3. **Robust Parsing**:
-   - Handles complex npm paths and ensures correct extraction of `package_name` and `version`.
-
----
-
-### Example Output:
-
-#### Input:
-- **Artifact Path**: `https://frigate.jfrog.io/.npm/ppa-fi-qsg-documentation-client/ppa-fi-qsg-documentation-client-1.0.1.json`
-
-#### Output:
-| repo_name       | package_type | package_name                      | version  | url                                                                                          | created_date              | license | secarch | artifactory_instance |
-|-----------------|--------------|-----------------------------------|----------|----------------------------------------------------------------------------------------------|---------------------------|---------|---------|-----------------------|
-| npm-ppa-virtual | npm          | ppa-fi-qsg-documentation-client  | 1.0.1    | https://frigate.jfrog.io/.npm/ppa-fi-qsg-documentation-client/ppa-fi-qsg-documentation-client-1.0.1.json | 2025-01-24T14:20:50.1234 |         |         | frigate.jfrog.io     |
-
----
-
-### Benefits:
-- Handles multiple package types with clean, extendable logic.
-- Ensures accurate parsing for npm artifacts.
-
-Let me know how it works! 😊
+The script will process all repositories in your JFrog Artifactory instance, attempt to extract accurate package names and versions for different package types, and save the results to a CSV file.
