@@ -1,19 +1,27 @@
-The error `unsupported operand type(s) for /: 'str' and 'int'` occurs because the `created_date` field in the metadata is being treated as a string, but the script attempts to perform arithmetic division (`/`) on it. This happens when the `created` field in the metadata is either missing or not in the expected format (a timestamp in milliseconds).
+The warnings you're seeing (`InsecureRequestWarning`) are caused by the `verify=False` parameter in the `requests.get()` calls. This parameter disables SSL certificate verification, which is not recommended for production environments because it makes your script vulnerable to man-in-the-middle attacks.
 
-To fix this issue, we need to:
-1. Ensure the `created` field exists and is a valid timestamp.
-2. Handle cases where the `created` field is missing or invalid.
-
-Here’s the updated script with proper handling of the `created_date` field:
+The warnings are coming from the `urllib3` library (which `requests` uses under the hood) to alert you that SSL verification is disabled.
 
 ---
 
-### Updated Script with Fix for `created_date`
+### **How to Suppress the Warnings**
+
+If you're working in a **non-production environment** and want to suppress these warnings, you can disable them using the `urllib3` library's `disable_warnings()` function.
+
+Here’s how you can modify your script to suppress the warnings:
+
+---
+
+### Updated Script with Suppressed Warnings
 
 ```python
 import requests
 import csv
 from datetime import datetime
+import urllib3
+
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configuration
 ARTIFACTORY_URL = 'https://your-artifactory-instance/artifactory'  # Replace with your Artifactory URL
@@ -116,37 +124,51 @@ if __name__ == '__main__':
 
 ---
 
-### Key Fixes:
-1. **Handling `created_date`**:
-   - The script now checks if `created_date` is an integer before performing the division (`/ 1000`).
-   - If `created_date` is missing or invalid, it defaults to `'N/A'`.
+### Key Changes:
+1. **Suppress Warnings**:
+   - Added `urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)` at the top of the script to suppress the `InsecureRequestWarning`.
 
-2. **Error Handling**:
-   - Added a `try-except` block to handle potential `TypeError` or `ValueError` when converting the timestamp.
-
-3. **Default Values**:
-   - If any required field (`name`, `version`, `downloadUri`, `created`) is missing, it defaults to `'N/A'`.
+2. **SSL Verification Disabled**:
+   - The `verify=False` parameter is still used in `requests.get()` to bypass SSL verification. This is necessary if your Artifactory server uses a self-signed or untrusted certificate.
 
 ---
 
-### Example Output (CSV):
-| Repo Name   | Package Type | Package Name     | Version | URL                                      | Created Date       |
-|-------------|--------------|------------------|---------|------------------------------------------|--------------------|
-| npm-repo    | npm          | my-package       | 1.2.3   | https://artifactory/.../my-package-1.2.3 | 2023-10-01 12:34:56 |
-| docker-repo | docker       | my-image         | latest  | https://artifactory/.../my-image-latest  | N/A                |
-| helm-repo   | helm         | my-chart         | 0.1.0   | https://artifactory/.../my-chart-0.1.0   | 2023-09-29 14:15:16 |
+### **Recommended Approach for Production**
+If you're working in a **production environment**, you should **avoid disabling SSL verification**. Instead, use one of the following approaches:
+
+1. **Use a Custom CA Bundle**:
+   - Provide the CA certificate for your Artifactory server using the `verify` parameter:
+     ```python
+     response = requests.get(url, headers=headers, verify='/path/to/artifactory-ca.crt')
+     ```
+
+2. **Add the Certificate to Python's CA Bundle**:
+   - Append your CA certificate to Python's CA bundle (located at `certifi.where()`).
+
+3. **Update System Certificates**:
+   - Ensure your system's CA certificates are up to date.
 
 ---
 
-### Debugging Tips:
-- If you encounter further issues, print the `metadata` object to inspect its structure:
-  ```python
-  print(metadata)
-  ```
-  This will help you identify any unexpected fields or data types.
+### Example of Using a Custom CA Bundle
+If you have a CA certificate file (e.g., `artifactory-ca.crt`), update the script as follows:
 
-- Ensure the `created` field in the metadata is a valid timestamp (in milliseconds). If it’s in a different format, adjust the conversion logic accordingly.
+```python
+def fetch_repositories():
+    """Fetch all repositories from Artifactory."""
+    repos_url = f'{ARTIFACTORY_URL}/api/repositories'
+    response = requests.get(repos_url, headers=headers, verify='/path/to/artifactory-ca.crt')  # Use custom CA bundle
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"Failed to fetch repositories: {response.status_code}")
+        return []
+```
 
 ---
+
+### Summary:
+- Use `urllib3.disable_warnings()` to suppress warnings in non-production environments.
+- For production, use a custom CA bundle or update your system's certificates to avoid disabling SSL verification.
 
 Let me know if you need further assistance!
