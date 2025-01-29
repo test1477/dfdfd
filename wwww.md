@@ -1,15 +1,10 @@
-The issue you're facing is that the script is not correctly extracting the **package type** and **version** for all package types (e.g., npm, NuGet, Yum, Generic, Helm, Terraform, etc.). This is because the script is currently hardcoded to handle **Docker** packages specifically, and the logic for extracting package names and versions may not work for other package types.
+The error `IndexError: list index out of range` occurs because the script is trying to access an index in the `segments` list that doesn't exist. This happens when the `artifact_path` doesn't have enough segments to match the expected structure for a specific package type (e.g., Docker, npm, etc.).
 
-To fix this, we need to:
-1. **Dynamically determine the package type** for each repository.
-2. **Generalize the logic** for extracting package names and versions to work with all package types.
-3. **Handle different package structures** (e.g., npm, NuGet, Docker, etc.) appropriately.
-
-Here’s the updated script that works for **all package types**:
+To fix this issue, we need to add **error handling** to ensure the script doesn't crash when it encounters unexpected paths. We'll also improve the logic for extracting package names and versions to make it more robust.
 
 ---
 
-### Updated Script for All Package Types
+### Updated Script with Error Handling
 
 ```python
 import requests
@@ -69,41 +64,47 @@ def extract_package_info(repo_name, package_type, artifact_path):
     package_name = repo_name
     version = ""
 
-    # Handle different package types
-    if package_type == "Docker":
-        # Docker: /<repo>/<image>/<tag>/manifest.json
-        if len(segments) >= 2:
-            package_name = f"{repo_name}/{segments[-3]}"  # Image name
-            version = segments[-2]  # Tag
-    elif package_type == "npm":
-        # npm: /<repo>/<package>/<version>/package.tgz
-        if len(segments) >= 2:
-            package_name = f"{repo_name}/{segments[-2]}"  # Package name
-            version = segments[-2]  # Version
-    elif package_type == "NuGet":
-        # NuGet: /<repo>/<package>/<version>/<package>.<version>.nupkg
-        if len(segments) >= 2:
-            package_name = f"{repo_name}/{segments[-2]}"  # Package name
-            version = segments[-2]  # Version
-    elif package_type == "Generic":
-        # Generic: /<repo>/<path>/<file>
-        if len(segments) >= 1:
-            package_name = f"{repo_name}/{'/'.join(segments[:-1])}"  # Path
-            version = segments[-1]  # File name
-    elif package_type == "Helm":
-        # Helm: /<repo>/<chart>/<version>/<chart>-<version>.tgz
-        if len(segments) >= 2:
-            package_name = f"{repo_name}/{segments[-2]}"  # Chart name
-            version = segments[-2]  # Version
-    elif package_type == "Terraform":
-        # Terraform: /<repo>/<module>/<version>/<module>-<version>.zip
-        if len(segments) >= 2:
-            package_name = f"{repo_name}/{segments[-2]}"  # Module name
-            version = segments[-2]  # Version
-    else:
-        # Default behavior for unknown package types
+    try:
+        # Handle different package types
+        if package_type == "Docker":
+            # Docker: /<repo>/<image>/<tag>/manifest.json
+            if len(segments) >= 3:  # Ensure there are enough segments
+                package_name = f"{repo_name}/{segments[-3]}"  # Image name
+                version = segments[-2]  # Tag
+        elif package_type == "npm":
+            # npm: /<repo>/<package>/<version>/package.tgz
+            if len(segments) >= 2:
+                package_name = f"{repo_name}/{segments[-2]}"  # Package name
+                version = segments[-2]  # Version
+        elif package_type == "NuGet":
+            # NuGet: /<repo>/<package>/<version>/<package>.<version>.nupkg
+            if len(segments) >= 2:
+                package_name = f"{repo_name}/{segments[-2]}"  # Package name
+                version = segments[-2]  # Version
+        elif package_type == "Generic":
+            # Generic: /<repo>/<path>/<file>
+            if len(segments) >= 1:
+                package_name = f"{repo_name}/{'/'.join(segments[:-1])}"  # Path
+                version = segments[-1]  # File name
+        elif package_type == "Helm":
+            # Helm: /<repo>/<chart>/<version>/<chart>-<version>.tgz
+            if len(segments) >= 2:
+                package_name = f"{repo_name}/{segments[-2]}"  # Chart name
+                version = segments[-2]  # Version
+        elif package_type == "Terraform":
+            # Terraform: /<repo>/<module>/<version>/<module>-<version>.zip
+            if len(segments) >= 2:
+                package_name = f"{repo_name}/{segments[-2]}"  # Module name
+                version = segments[-2]  # Version
+        else:
+            # Default behavior for unknown package types
+            package_name = repo_name
+            version = segments[-1] if segments else ""
+    except IndexError:
+        # Handle cases where the path doesn't match the expected structure
+        print(f"Warning: Unable to parse path for {repo_name}/{artifact_path}")
         package_name = repo_name
-        version = segments[-1] if segments else ""
+        version = ""
 
     return package_name, version
 
@@ -180,16 +181,16 @@ if __name__ == '__main__':
 
 ---
 
-### Key Changes:
-1. **Dynamic Package Type Handling**:
-   - The `extract_package_info` function now handles different package types (e.g., Docker, npm, NuGet, Generic, Helm, Terraform) and extracts the package name and version based on the repository type.
+### Key Fixes:
+1. **Error Handling**:
+   - Added a `try-except` block in the `extract_package_info` function to handle `IndexError` when the `artifact_path` doesn't match the expected structure.
+   - If the path is invalid, the script logs a warning and assigns default values (`repo_name` for `package_name` and an empty string for `version`).
 
-2. **Generalized Logic**:
-   - The script processes **all package types**, not just Docker.
-   - The logic for extracting package names and versions is tailored to the structure of each package type.
+2. **Robust Path Parsing**:
+   - Added checks to ensure there are enough segments in the `artifact_path` before accessing specific indices (e.g., `segments[-3]`, `segments[-2]`).
 
-3. **CSV Output**:
-   - The CSV file now includes metadata for **all package types**.
+3. **Logging**:
+   - Added a warning message to log paths that couldn't be parsed.
 
 ---
 
@@ -202,8 +203,12 @@ if __name__ == '__main__':
 
 ---
 
-### Notes:
-- The script assumes that the package structure follows standard conventions for each package type. If your Artifactory instance uses a custom structure, you may need to adjust the `extract_package_info` function.
-- If you encounter any issues with specific package types, let me know, and I can help refine the logic further.
+### Debugging Tips:
+- If you encounter further issues, print the `artifact_path` and `segments` in the `extract_package_info` function to debug:
+  ```python
+  print(f"Path: {artifact_path}, Segments: {segments}")
+  ```
+
+- Adjust the logic in `extract_package_info` if your Artifactory instance uses a custom structure for certain package types.
 
 Let me know if you need additional assistance!
