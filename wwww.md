@@ -1,123 +1,14 @@
-The error `CERTIFICATE_VERIFY_FAILED` occurs when Python's `requests` library is unable to verify the SSL certificate of the JFrog Artifactory server. This can happen if:
+The error `unsupported operand type(s) for /: 'str' and 'int'` occurs because the `created_date` field in the metadata is being treated as a string, but the script attempts to perform arithmetic division (`/`) on it. This happens when the `created` field in the metadata is either missing or not in the expected format (a timestamp in milliseconds).
 
-1. The server uses a self-signed certificate.
-2. The server's certificate is not recognized by the CA (Certificate Authority) bundle used by Python.
-3. The server's SSL configuration is misconfigured.
+To fix this issue, we need to:
+1. Ensure the `created` field exists and is a valid timestamp.
+2. Handle cases where the `created` field is missing or invalid.
 
-To resolve this issue, you have a few options:
-
----
-
-### **Option 1: Disable SSL Verification (Not Recommended for Production)**
-You can disable SSL verification by passing `verify=False` to the `requests.get()` calls. However, this is **not recommended for production environments** as it makes your script vulnerable to man-in-the-middle attacks.
-
-Update the `requests.get()` calls in the script as follows:
-
-```python
-response = requests.get(url, headers=headers, verify=False)
-```
-
-Example:
-```python
-def fetch_packages(repo_key):
-    """Fetch packages from a specific repository."""
-    url = f'{ARTIFACTORY_URL}/api/storage/{repo_key}'
-    response = requests.get(url, headers=headers, verify=False)  # Disable SSL verification
-    if response.status_code == 200:
-        return response.json().get('children', [])
-    else:
-        print(f"Failed to fetch packages from {repo_key}: {response.status_code}")
-        return []
-```
+Here’s the updated script with proper handling of the `created_date` field:
 
 ---
 
-### **Option 2: Use a Custom CA Bundle**
-If your JFrog Artifactory server uses a self-signed certificate or a certificate issued by a private CA, you can provide the CA certificate to the `requests` library.
-
-1. **Download the CA Certificate**:
-   - Obtain the CA certificate (e.g., `.crt` or `.pem` file) for your Artifactory server.
-   - Save it to a file, e.g., `artifactory-ca.crt`.
-
-2. **Update the Script**:
-   - Pass the path to the CA certificate file using the `verify` parameter in `requests.get()`.
-
-Example:
-```python
-def fetch_packages(repo_key):
-    """Fetch packages from a specific repository."""
-    url = f'{ARTIFACTORY_URL}/api/storage/{repo_key}'
-    response = requests.get(url, headers=headers, verify='/path/to/artifactory-ca.crt')  # Use custom CA bundle
-    if response.status_code == 200:
-        return response.json().get('children', [])
-    else:
-        print(f"Failed to fetch packages from {repo_key}: {response.status_code}")
-        return []
-```
-
----
-
-### **Option 3: Add the Certificate to Python's CA Bundle**
-If you have the CA certificate, you can add it to Python's CA bundle. This ensures that all `requests` calls in your script (and other Python applications) trust the certificate.
-
-1. **Locate Python's CA Bundle**:
-   - Run the following command to find the location of Python's CA bundle:
-     ```python
-     import certifi
-     print(certifi.where())
-     ```
-   - This will output the path to the CA bundle file (e.g., `lib/python3.x/site-packages/certifi/cacert.pem`).
-
-2. **Add the Certificate**:
-   - Append the contents of your CA certificate (e.g., `artifactory-ca.crt`) to the CA bundle file.
-
-3. **Restart Your Script**:
-   - No changes to the script are required. Python will now trust the certificate.
-
----
-
-### **Option 4: Use Environment Variables (for Testing)**
-If you're running the script in a test environment and want to bypass SSL verification globally, you can set the `PYTHONHTTPSVERIFY` environment variable to `0`.
-
-On Linux/Mac:
-```bash
-export PYTHONHTTPSVERIFY=0
-python report_script.py
-```
-
-On Windows:
-```cmd
-set PYTHONHTTPSVERIFY=0
-python report_script.py
-```
-
-This disables SSL verification for all `requests` calls in the script.
-
----
-
-### **Option 5: Update System Certificates**
-If the server's certificate is issued by a recognized CA but Python still cannot verify it, your system's CA certificates might be outdated. Update them as follows:
-
-- **On Linux**:
-  ```bash
-  sudo apt-get update
-  sudo apt-get install ca-certificates
-  sudo update-ca-certificates
-  ```
-
-- **On Mac**:
-  ```bash
-  brew update
-  brew install ca-certificates
-  ```
-
-- **On Windows**:
-  Update your system's root certificates through Windows Update.
-
----
-
-### Updated Script with SSL Verification Disabled (for Testing)
-Here’s the updated script with SSL verification disabled (for testing purposes only):
+### Updated Script with Fix for `created_date`
 
 ```python
 import requests
@@ -175,9 +66,14 @@ def extract_package_info(repo_key, package_path, repo_type):
     url = metadata.get('downloadUri', 'N/A')
     created_date = metadata.get('created', 'N/A')
 
-    # Convert timestamp to readable date
-    if created_date != 'N/A':
-        created_date = datetime.fromtimestamp(created_date / 1000).strftime('%Y-%m-%d %H:%M:%S')
+    # Handle created_date (convert timestamp to readable date)
+    if created_date != 'N/A' and isinstance(created_date, int):
+        try:
+            created_date = datetime.fromtimestamp(created_date / 1000).strftime('%Y-%m-%d %H:%M:%S')
+        except (TypeError, ValueError):
+            created_date = 'N/A'
+    else:
+        created_date = 'N/A'
 
     return [repo_key, repo_type, package_name, version, url, created_date]
 
@@ -220,8 +116,37 @@ if __name__ == '__main__':
 
 ---
 
-### Recommendation:
-- For **production environments**, use **Option 2 (Custom CA Bundle)** or **Option 3 (Update Python's CA Bundle)**.
-- For **testing purposes**, you can use **Option 1 (Disable SSL Verification)** or **Option 4 (Environment Variable)**.
+### Key Fixes:
+1. **Handling `created_date`**:
+   - The script now checks if `created_date` is an integer before performing the division (`/ 1000`).
+   - If `created_date` is missing or invalid, it defaults to `'N/A'`.
+
+2. **Error Handling**:
+   - Added a `try-except` block to handle potential `TypeError` or `ValueError` when converting the timestamp.
+
+3. **Default Values**:
+   - If any required field (`name`, `version`, `downloadUri`, `created`) is missing, it defaults to `'N/A'`.
+
+---
+
+### Example Output (CSV):
+| Repo Name   | Package Type | Package Name     | Version | URL                                      | Created Date       |
+|-------------|--------------|------------------|---------|------------------------------------------|--------------------|
+| npm-repo    | npm          | my-package       | 1.2.3   | https://artifactory/.../my-package-1.2.3 | 2023-10-01 12:34:56 |
+| docker-repo | docker       | my-image         | latest  | https://artifactory/.../my-image-latest  | N/A                |
+| helm-repo   | helm         | my-chart         | 0.1.0   | https://artifactory/.../my-chart-0.1.0   | 2023-09-29 14:15:16 |
+
+---
+
+### Debugging Tips:
+- If you encounter further issues, print the `metadata` object to inspect its structure:
+  ```python
+  print(metadata)
+  ```
+  This will help you identify any unexpected fields or data types.
+
+- Ensure the `created` field in the metadata is a valid timestamp (in milliseconds). If it’s in a different format, adjust the conversion logic accordingly.
+
+---
 
 Let me know if you need further assistance!
