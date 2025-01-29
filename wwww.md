@@ -1,134 +1,105 @@
-If you only need to fetch reports for **Docker repositories**, we can filter the repositories based on their `packageType` and process only those with the `Docker` type. This will reduce unnecessary processing for other package types like `npm`, `helm`, etc.
+To fetch **all package types** (e.g., npm, NuGet, Yum, Generic, Helm, Terraform, etc.) from JFrog Artifactory and correctly extract their metadata (including version and package type), we need to modify the script to handle different package types and their specific metadata structures.
 
-Here’s the updated script that processes only Docker repositories:
+Below is the updated Python script that fetches **all package types**, extracts their metadata, and saves the report in CSV format.
 
 ---
 
-### Updated Script for Only Docker Repositories
+### Updated Python Script: `report_script.py`
 
 ```python
 import requests
 import csv
-import warnings
-from urllib.parse import urljoin
 from datetime import datetime
 
-# Suppress SSL verification warnings
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
-warnings.simplefilter('ignore', InsecureRequestWarning)
+# Configuration
+ARTIFACTORY_URL = 'https://your-artifactory-instance/artifactory'  # Replace with your Artifactory URL
+API_KEY = 'your-api-key'  # Replace with your API key or use username/password
+CSV_FILE = 'all_packages_report.csv'
 
-# JFrog Artifactory instance details
-JFROG_URL = 'https://frigate.jfrog.io/artifactory'  # Base URL for JFrog
-ARTIFACTORY_TOKEN = 'your_artifactory_api_token'  # Replace with your API token
-
-# Headers for the API request
+# Headers for authentication
 headers = {
-    'Authorization': f'Bearer {ARTIFACTORY_TOKEN}',
-    'Accept': 'application/json',
+    'X-JFrog-Art-Api': API_KEY
 }
 
-# Function to fetch all repositories
 def fetch_repositories():
-    """
-    Fetches a list of all repositories in the Artifactory instance.
-    """
-    url = f"{JFROG_URL}/api/repositories"
-    response = requests.get(url, headers=headers, verify=False)
-
+    """Fetch all repositories from Artifactory."""
+    repos_url = f'{ARTIFACTORY_URL}/api/repositories'
+    response = requests.get(repos_url, headers=headers)
     if response.status_code == 200:
         return response.json()
     else:
         print(f"Failed to fetch repositories: {response.status_code}")
         return []
 
-# Function to list all artifacts in a repository
-def list_artifacts(repo_name):
-    """
-    Recursively fetches all artifacts in the specified repository.
-    """
-    url = f"{JFROG_URL}/api/storage/{repo_name}?list&deep=1"
-    response = requests.get(url, headers=headers, verify=False)
-
+def fetch_packages(repo_key):
+    """Fetch packages from a specific repository."""
+    url = f'{ARTIFACTORY_URL}/api/storage/{repo_key}'
+    response = requests.get(url, headers=headers)
     if response.status_code == 200:
-        return response.json().get("files", [])
+        return response.json().get('children', [])
     else:
-        print(f"Failed to list artifacts for {repo_name}: {response.status_code}")
+        print(f"Failed to fetch packages from {repo_key}: {response.status_code}")
         return []
 
-# Function to process repository artifacts without extra API calls
-def process_repository(repo_name, package_type):
-    """
-    Processes all artifacts in a repository using batch metadata from the recursive listing.
-    """
-    artifact_list = list_artifacts(repo_name)
-    repo_details = []
+def fetch_package_metadata(repo_key, package_path):
+    """Fetch metadata for a specific package."""
+    url = f'{ARTIFACTORY_URL}/api/storage/{repo_key}/{package_path}'
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"Failed to fetch metadata for {package_path}: {response.status_code}")
+        return None
 
-    for artifact in artifact_list:
-        artifact_path = artifact.get("uri", "")
-        artifact_url = urljoin(f"{JFROG_URL}/{repo_name}", artifact_path)
-        created_date = artifact.get("lastModified", "")
+def extract_package_info(repo_key, package_path, repo_type):
+    """Extract package information based on repository type."""
+    metadata = fetch_package_metadata(repo_key, package_path)
+    if not metadata:
+        return None
 
-        # Parse package name and version from artifact path
-        segments = artifact_path.strip("/").split("/")
-        if len(segments) >= 2:
-            package_name = f"{repo_name}/{'/'.join(segments[:-2])}"  # Up to the version folder
-            version = segments[-2]  # Second-to-last segment
-        else:
-            package_name = repo_name
-            version = ""
+    package_name = metadata.get('name', 'N/A')
+    version = metadata.get('version', 'N/A')
+    url = metadata.get('downloadUri', 'N/A')
+    created_date = metadata.get('created', 'N/A')
 
-        # Append details only for Docker repositories
-        if package_type == "Docker":
-            repo_details.append({
-                "repo_name": repo_name,
-                "package_type": package_type,
-                "package_name": package_name,
-                "version": version,
-                "url": artifact_url,
-                "created_date": created_date,
-                "license": "",  # Leave blank if not available
-                "secarch": "",  # Leave blank if not available
-                "artifactory_instance": "frigate.jfrog.io"
-            })
-    
-    return repo_details
+    # Convert timestamp to readable date
+    if created_date != 'N/A':
+        created_date = datetime.fromtimestamp(created_date / 1000).strftime('%Y-%m-%d %H:%M:%S')
 
-# Function to save data to CSV
+    return [repo_key, repo_type, package_name, version, url, created_date]
+
 def save_to_csv(data, filename):
-    """
-    Saves extracted metadata to a CSV file.
-    """
-    headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'license', 'secarch', 'artifactory_instance']
-    
-    with open(filename, mode='w', newline='', encoding='utf-8') as file:
-        writer = csv.DictWriter(file, fieldnames=headers)
-        writer.writeheader()
-        writer.writerows(data)
-    
-    print(f"Data has been written to {filename}")
+    """Save the report data to a CSV file."""
+    with open(filename, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Repo Name', 'Package Type', 'Package Name', 'Version', 'URL', 'Created Date'])
+        for row in data:
+            writer.writerow(row)
 
-# Main function to process all repositories
 def main():
-    """
-    Main function to process all repositories and extract metadata.
-    """
+    # Fetch all repositories
     repositories = fetch_repositories()
-    all_repo_details = []
+    if not repositories:
+        return
+
+    report_data = []
 
     for repo in repositories:
-        repo_name = repo.get("key")
-        package_type = repo.get("packageType", "")  # Dynamically fetch the package type
-        print(f"Processing repository: {repo_name} (Type: {package_type})")
+        repo_key = repo['key']
+        repo_type = repo['type']
+        print(f"Processing repository: {repo_key} (Type: {repo_type})")
 
-        # Process only Docker repositories
-        if package_type == "Docker":
-            repo_details = process_repository(repo_name, package_type)
-            all_repo_details.extend(repo_details)
+        packages = fetch_packages(repo_key)
+        for pkg in packages:
+            package_path = pkg['uri'][1:]  # Remove leading slash
+            package_info = extract_package_info(repo_key, package_path, repo_type)
 
-    # Save all details to CSV with a dynamic file name
-    current_date = datetime.now().strftime('%Y-%m-%d')  # Current date in YYYY-MM-DD format
-    output_file = f"EV_EOL_{current_date}_docker.csv"  # Save only Docker reports
-    save_to_csv(all_repo_details, output_file)
+            if package_info:
+                report_data.append(package_info)
+
+    # Save the report to CSV
+    save_to_csv(report_data, CSV_FILE)
+    print(f"Report saved to {CSV_FILE}")
 
 if __name__ == '__main__':
     main()
@@ -136,51 +107,51 @@ if __name__ == '__main__':
 
 ---
 
-### Key Updates:
-1. **Filter for Docker Repositories**:
-   - The script now processes **only repositories with `packageType == "Docker"`**.
-   - This ensures that only Docker-related artifacts are processed and saved in the CSV file.
+### Key Changes and Features:
+1. **Supports All Package Types**:
+   - The script now processes all repository types (e.g., npm, NuGet, Yum, Generic, Helm, Terraform, etc.).
+   - The `repo_type` is extracted from the repository metadata and included in the report.
 
-2. **Dynamic File Naming for Docker Reports**:
-   - The output file is saved as `EV_EOL_<current_date>_docker.csv`, where `<current_date>` is dynamically determined.
+2. **Dynamic Metadata Extraction**:
+   - The `extract_package_info` function dynamically extracts metadata for any package type.
+   - It retrieves the `name`, `version`, `downloadUri`, and `created` fields from the package metadata.
 
----
+3. **CSV Report**:
+   - The report includes the following columns:
+     - **Repo Name**: The name of the repository.
+     - **Package Type**: The type of package (e.g., npm, NuGet, Docker, etc.).
+     - **Package Name**: The name of the package.
+     - **Version**: The version of the package.
+     - **URL**: The URL to download the package.
+     - **Created Date**: The date when the package was created.
 
-### Expected Output (CSV):
-
-#### Example File Name:
-`EV_EOL_2025-01-24_docker.csv`
-
-| repo_name               | package_type | package_name                                | version  | url                                                                                           | created_date              | license | secarch | artifactory_instance |
-|-------------------------|--------------|---------------------------------------------|----------|-----------------------------------------------------------------------------------------------|---------------------------|---------|---------|-----------------------|
-| msartaz-train-docker-pr | Docker       | msartaz-train-docker-pr/ace-test/test-github-java | 1.0.18   | https://frigate.jfrog.io/artifactory/msartaz-train-docker-pr/ace-test/test-github-java/1.0.18/sha256.marker | 2024-05-01T17:45:42.3832 |         |         | frigate.jfrog.io     |
-| msartaz-train-docker-pr | Docker       | msartaz-train-docker-pr/ace-test/test-github-java | 1.0.19   | https://frigate.jfrog.io/artifactory/msartaz-train-docker-pr/ace-test/test-github-java/1.0.19/sha256.marker | 2024-05-01T17:45:42.3832 |         |         | frigate.jfrog.io     |
-
----
-
-### Steps to Run:
-
-1. **Replace API Token**:
-   - Replace `your_artifactory_api_token` with your actual JFrog Artifactory API token.
-
-2. **Run the Script**:
-   - Save the script as `docker_jfrog_metadata_extractor.py`.
-   - Execute the script:
-     ```bash
-     python docker_jfrog_metadata_extractor.py
-     ```
-
-3. **Check the Output**:
-   - The generated CSV file will contain only Docker repositories and related artifacts.
+4. **Handles All Repositories**:
+   - The script fetches all repositories and processes each one, regardless of the package type.
 
 ---
 
-### Next Steps:
+### How to Use:
+1. Replace `ARTIFACTORY_URL` with your JFrog Artifactory instance URL.
+2. Replace `API_KEY` with your Artifactory API key or modify the script to use username/password for authentication.
+3. Run the script:
+   ```bash
+   python report_script.py
+   ```
 
-- **Test the Script**:
-   - Run the script and check the output CSV file for Docker repositories.
-  
-- **Adjust for Additional Fields** (Optional):
-   - If `license` or `secarch` fields are available, update the script to populate those dynamically.
+---
 
-Let me know how it works for you or if you need further refinements!
+### Example Output (CSV):
+| Repo Name   | Package Type | Package Name     | Version | URL                                      | Created Date       |
+|-------------|--------------|------------------|---------|------------------------------------------|--------------------|
+| npm-repo    | npm          | my-package       | 1.2.3   | https://artifactory/.../my-package-1.2.3 | 2023-10-01 12:34:56 |
+| docker-repo | docker       | my-image         | latest  | https://artifactory/.../my-image-latest  | 2023-09-30 10:11:12 |
+| helm-repo   | helm         | my-chart         | 0.1.0   | https://artifactory/.../my-chart-0.1.0   | 2023-09-29 14:15:16 |
+
+---
+
+### Notes:
+- The script assumes that the Artifactory API returns consistent metadata fields (`name`, `version`, `downloadUri`, `created`) for all package types. If some package types have different metadata structures, you may need to add custom logic to handle them.
+- Ensure your API key has sufficient permissions to access all repositories and packages.
+- If you encounter any issues with specific package types, let me know, and I can help refine the script further.
+
+Let me know if you need additional assistance!
