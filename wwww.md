@@ -1,24 +1,17 @@
-The warnings you're seeing (`InsecureRequestWarning`) are caused by the `verify=False` parameter in the `requests.get()` calls. This parameter disables SSL certificate verification, which is not recommended for production environments because it makes your script vulnerable to man-in-the-middle attacks.
+If the script is taking a long time to execute, it’s likely because it’s making a large number of sequential HTTP requests to fetch metadata for each package. To speed it up, we can use **parallel processing** to fetch metadata concurrently. This can be achieved using Python's `concurrent.futures` module, which allows us to run tasks in parallel using threads or processes.
 
-The warnings are coming from the `urllib3` library (which `requests` uses under the hood) to alert you that SSL verification is disabled.
-
----
-
-### **How to Suppress the Warnings**
-
-If you're working in a **non-production environment** and want to suppress these warnings, you can disable them using the `urllib3` library's `disable_warnings()` function.
-
-Here’s how you can modify your script to suppress the warnings:
+Here’s the updated script with **parallel processing** to speed up execution:
 
 ---
 
-### Updated Script with Suppressed Warnings
+### Updated Script with Parallel Processing
 
 ```python
 import requests
 import csv
 from datetime import datetime
 import urllib3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -27,6 +20,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ARTIFACTORY_URL = 'https://your-artifactory-instance/artifactory'  # Replace with your Artifactory URL
 API_KEY = 'your-api-key'  # Replace with your API key or use username/password
 CSV_FILE = 'all_packages_report.csv'
+MAX_THREADS = 10  # Adjust based on your system and network capacity
 
 # Headers for authentication
 headers = {
@@ -93,6 +87,31 @@ def save_to_csv(data, filename):
         for row in data:
             writer.writerow(row)
 
+def process_repository(repo):
+    """Process a single repository and fetch package metadata in parallel."""
+    repo_key = repo['key']
+    repo_type = repo['type']
+    print(f"Processing repository: {repo_key} (Type: {repo_type})")
+
+    packages = fetch_packages(repo_key)
+    report_data = []
+
+    # Use ThreadPoolExecutor to fetch package metadata in parallel
+    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        futures = []
+        for pkg in packages:
+            package_path = pkg['uri'][1:]  # Remove leading slash
+            futures.append(
+                executor.submit(extract_package_info, repo_key, package_path, repo_type)
+            )
+
+        for future in as_completed(futures):
+            package_info = future.result()
+            if package_info:
+                report_data.append(package_info)
+
+    return report_data
+
 def main():
     # Fetch all repositories
     repositories = fetch_repositories()
@@ -101,18 +120,9 @@ def main():
 
     report_data = []
 
+    # Process repositories sequentially (but fetch packages in parallel)
     for repo in repositories:
-        repo_key = repo['key']
-        repo_type = repo['type']
-        print(f"Processing repository: {repo_key} (Type: {repo_type})")
-
-        packages = fetch_packages(repo_key)
-        for pkg in packages:
-            package_path = pkg['uri'][1:]  # Remove leading slash
-            package_info = extract_package_info(repo_key, package_path, repo_type)
-
-            if package_info:
-                report_data.append(package_info)
+        report_data.extend(process_repository(repo))
 
     # Save the report to CSV
     save_to_csv(report_data, CSV_FILE)
@@ -124,51 +134,55 @@ if __name__ == '__main__':
 
 ---
 
-### Key Changes:
-1. **Suppress Warnings**:
-   - Added `urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)` at the top of the script to suppress the `InsecureRequestWarning`.
+### Key Changes for Speed Improvement:
+1. **Parallel Processing**:
+   - The `ThreadPoolExecutor` is used to fetch package metadata concurrently.
+   - Each package's metadata is fetched in a separate thread, allowing multiple HTTP requests to run in parallel.
 
-2. **SSL Verification Disabled**:
-   - The `verify=False` parameter is still used in `requests.get()` to bypass SSL verification. This is necessary if your Artifactory server uses a self-signed or untrusted certificate.
+2. **Thread Pool Size**:
+   - The `MAX_THREADS` variable controls the number of concurrent threads. You can adjust this based on your system's capabilities and network bandwidth.
 
----
-
-### **Recommended Approach for Production**
-If you're working in a **production environment**, you should **avoid disabling SSL verification**. Instead, use one of the following approaches:
-
-1. **Use a Custom CA Bundle**:
-   - Provide the CA certificate for your Artifactory server using the `verify` parameter:
-     ```python
-     response = requests.get(url, headers=headers, verify='/path/to/artifactory-ca.crt')
-     ```
-
-2. **Add the Certificate to Python's CA Bundle**:
-   - Append your CA certificate to Python's CA bundle (located at `certifi.where()`).
-
-3. **Update System Certificates**:
-   - Ensure your system's CA certificates are up to date.
+3. **Efficient Repository Processing**:
+   - Repositories are processed sequentially, but packages within each repository are processed in parallel.
 
 ---
 
-### Example of Using a Custom CA Bundle
-If you have a CA certificate file (e.g., `artifactory-ca.crt`), update the script as follows:
+### Performance Considerations:
+- **Network Latency**:
+  - The script's performance is heavily dependent on network latency and the Artifactory server's response time.
+  - Parallel processing reduces the total time by overlapping network requests.
 
-```python
-def fetch_repositories():
-    """Fetch all repositories from Artifactory."""
-    repos_url = f'{ARTIFACTORY_URL}/api/repositories'
-    response = requests.get(repos_url, headers=headers, verify='/path/to/artifactory-ca.crt')  # Use custom CA bundle
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Failed to fetch repositories: {response.status_code}")
-        return []
-```
+- **Thread Pool Size**:
+  - Increasing `MAX_THREADS` can speed up the script, but too many threads may overwhelm the Artifactory server or your network.
+  - Start with a small number (e.g., 10) and gradually increase it while monitoring performance.
+
+- **Error Handling**:
+  - If a request fails, the script logs the error and continues processing other packages.
 
 ---
 
-### Summary:
-- Use `urllib3.disable_warnings()` to suppress warnings in non-production environments.
-- For production, use a custom CA bundle or update your system's certificates to avoid disabling SSL verification.
+### Example Output (CSV):
+| Repo Name   | Package Type | Package Name     | Version | URL                                      | Created Date       |
+|-------------|--------------|------------------|---------|------------------------------------------|--------------------|
+| npm-repo    | npm          | my-package       | 1.2.3   | https://artifactory/.../my-package-1.2.3 | 2023-10-01 12:34:56 |
+| docker-repo | docker       | my-image         | latest  | https://artifactory/.../my-image-latest  | N/A                |
+| helm-repo   | helm         | my-chart         | 0.1.0   | https://artifactory/.../my-chart-0.1.0   | 2023-09-29 14:15:16 |
 
-Let me know if you need further assistance!
+---
+
+### Additional Optimization Tips:
+1. **Batch Requests**:
+   - If the Artifactory API supports batch requests, you can fetch metadata for multiple packages in a single request.
+
+2. **Caching**:
+   - Cache metadata for packages that don’t change frequently to avoid redundant requests.
+
+3. **Pagination**:
+   - If the repository contains a large number of packages, implement pagination to fetch packages in smaller batches.
+
+4. **Asynchronous Requests**:
+   - For even better performance, consider using an asynchronous HTTP library like `aiohttp` instead of `requests`.
+
+---
+
+Let me know if you need further assistance or additional optimizations!
