@@ -1,132 +1,178 @@
-If the script is taking a long time to execute, it’s likely because it’s making a large number of sequential HTTP requests to fetch metadata for each package. To speed it up, we can use **parallel processing** to fetch metadata concurrently. This can be achieved using Python's `concurrent.futures` module, which allows us to run tasks in parallel using threads or processes.
+The issue you're facing is that the script is not correctly extracting the **package type** and **version** for all package types (e.g., npm, NuGet, Yum, Generic, Helm, Terraform, etc.). This is because the script is currently hardcoded to handle **Docker** packages specifically, and the logic for extracting package names and versions may not work for other package types.
 
-Here’s the updated script with **parallel processing** to speed up execution:
+To fix this, we need to:
+1. **Dynamically determine the package type** for each repository.
+2. **Generalize the logic** for extracting package names and versions to work with all package types.
+3. **Handle different package structures** (e.g., npm, NuGet, Docker, etc.) appropriately.
+
+Here’s the updated script that works for **all package types**:
 
 ---
 
-### Updated Script with Parallel Processing
+### Updated Script for All Package Types
 
 ```python
 import requests
 import csv
+import warnings
+from urllib.parse import urljoin
 from datetime import datetime
-import urllib3
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Disable SSL warnings
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# Suppress SSL verification warnings
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+warnings.simplefilter('ignore', InsecureRequestWarning)
 
-# Configuration
-ARTIFACTORY_URL = 'https://your-artifactory-instance/artifactory'  # Replace with your Artifactory URL
-API_KEY = 'your-api-key'  # Replace with your API key or use username/password
-CSV_FILE = 'all_packages_report.csv'
-MAX_THREADS = 10  # Adjust based on your system and network capacity
+# JFrog Artifactory instance details
+JFROG_URL = 'https://frigate.jfrog.io/artifactory'  # Base URL for JFrog
+ARTIFACTORY_TOKEN = 'your_artifactory_api_token'  # Replace with your API token
 
-# Headers for authentication
+# Headers for the API request
 headers = {
-    'X-JFrog-Art-Api': API_KEY
+    'Authorization': f'Bearer {ARTIFACTORY_TOKEN}',
+    'Accept': 'application/json',
 }
 
+# Function to fetch all repositories
 def fetch_repositories():
-    """Fetch all repositories from Artifactory."""
-    repos_url = f'{ARTIFACTORY_URL}/api/repositories'
-    response = requests.get(repos_url, headers=headers, verify=False)  # Disable SSL verification
+    """
+    Fetches a list of all repositories in the Artifactory instance.
+    """
+    url = f"{JFROG_URL}/api/repositories"
+    response = requests.get(url, headers=headers, verify=False)
+
     if response.status_code == 200:
         return response.json()
     else:
         print(f"Failed to fetch repositories: {response.status_code}")
         return []
 
-def fetch_packages(repo_key):
-    """Fetch packages from a specific repository."""
-    url = f'{ARTIFACTORY_URL}/api/storage/{repo_key}'
-    response = requests.get(url, headers=headers, verify=False)  # Disable SSL verification
+# Function to list all artifacts in a repository
+def list_artifacts(repo_name):
+    """
+    Recursively fetches all artifacts in the specified repository.
+    """
+    url = f"{JFROG_URL}/api/storage/{repo_name}?list&deep=1"
+    response = requests.get(url, headers=headers, verify=False)
+
     if response.status_code == 200:
-        return response.json().get('children', [])
+        return response.json().get("files", [])
     else:
-        print(f"Failed to fetch packages from {repo_key}: {response.status_code}")
+        print(f"Failed to list artifacts for {repo_name}: {response.status_code}")
         return []
 
-def fetch_package_metadata(repo_key, package_path):
-    """Fetch metadata for a specific package."""
-    url = f'{ARTIFACTORY_URL}/api/storage/{repo_key}/{package_path}'
-    response = requests.get(url, headers=headers, verify=False)  # Disable SSL verification
-    if response.status_code == 200:
-        return response.json()
+# Function to extract package name and version based on package type
+def extract_package_info(repo_name, package_type, artifact_path):
+    """
+    Extracts package name and version based on the package type and artifact path.
+    """
+    segments = artifact_path.strip("/").split("/")
+    package_name = repo_name
+    version = ""
+
+    # Handle different package types
+    if package_type == "Docker":
+        # Docker: /<repo>/<image>/<tag>/manifest.json
+        if len(segments) >= 2:
+            package_name = f"{repo_name}/{segments[-3]}"  # Image name
+            version = segments[-2]  # Tag
+    elif package_type == "npm":
+        # npm: /<repo>/<package>/<version>/package.tgz
+        if len(segments) >= 2:
+            package_name = f"{repo_name}/{segments[-2]}"  # Package name
+            version = segments[-2]  # Version
+    elif package_type == "NuGet":
+        # NuGet: /<repo>/<package>/<version>/<package>.<version>.nupkg
+        if len(segments) >= 2:
+            package_name = f"{repo_name}/{segments[-2]}"  # Package name
+            version = segments[-2]  # Version
+    elif package_type == "Generic":
+        # Generic: /<repo>/<path>/<file>
+        if len(segments) >= 1:
+            package_name = f"{repo_name}/{'/'.join(segments[:-1])}"  # Path
+            version = segments[-1]  # File name
+    elif package_type == "Helm":
+        # Helm: /<repo>/<chart>/<version>/<chart>-<version>.tgz
+        if len(segments) >= 2:
+            package_name = f"{repo_name}/{segments[-2]}"  # Chart name
+            version = segments[-2]  # Version
+    elif package_type == "Terraform":
+        # Terraform: /<repo>/<module>/<version>/<module>-<version>.zip
+        if len(segments) >= 2:
+            package_name = f"{repo_name}/{segments[-2]}"  # Module name
+            version = segments[-2]  # Version
     else:
-        print(f"Failed to fetch metadata for {package_path}: {response.status_code}")
-        return None
+        # Default behavior for unknown package types
+        package_name = repo_name
+        version = segments[-1] if segments else ""
 
-def extract_package_info(repo_key, package_path, repo_type):
-    """Extract package information based on repository type."""
-    metadata = fetch_package_metadata(repo_key, package_path)
-    if not metadata:
-        return None
+    return package_name, version
 
-    package_name = metadata.get('name', 'N/A')
-    version = metadata.get('version', 'N/A')
-    url = metadata.get('downloadUri', 'N/A')
-    created_date = metadata.get('created', 'N/A')
+# Function to process repository artifacts
+def process_repository(repo_name, package_type):
+    """
+    Processes all artifacts in a repository and extracts metadata.
+    """
+    artifact_list = list_artifacts(repo_name)
+    repo_details = []
 
-    # Handle created_date (convert timestamp to readable date)
-    if created_date != 'N/A' and isinstance(created_date, int):
-        try:
-            created_date = datetime.fromtimestamp(created_date / 1000).strftime('%Y-%m-%d %H:%M:%S')
-        except (TypeError, ValueError):
-            created_date = 'N/A'
-    else:
-        created_date = 'N/A'
+    for artifact in artifact_list:
+        artifact_path = artifact.get("uri", "")
+        artifact_url = urljoin(f"{JFROG_URL}/{repo_name}", artifact_path)
+        created_date = artifact.get("lastModified", "")
 
-    return [repo_key, repo_type, package_name, version, url, created_date]
+        # Extract package name and version
+        package_name, version = extract_package_info(repo_name, package_type, artifact_path)
 
+        # Append details for all package types
+        repo_details.append({
+            "repo_name": repo_name,
+            "package_type": package_type,
+            "package_name": package_name,
+            "version": version,
+            "url": artifact_url,
+            "created_date": created_date,
+            "license": "",  # Leave blank if not available
+            "secarch": "",  # Leave blank if not available
+            "artifactory_instance": "frigate.jfrog.io"
+        })
+    
+    return repo_details
+
+# Function to save data to CSV
 def save_to_csv(data, filename):
-    """Save the report data to a CSV file."""
-    with open(filename, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(['Repo Name', 'Package Type', 'Package Name', 'Version', 'URL', 'Created Date'])
-        for row in data:
-            writer.writerow(row)
+    """
+    Saves extracted metadata to a CSV file.
+    """
+    headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'license', 'secarch', 'artifactory_instance']
+    
+    with open(filename, mode='w', newline='', encoding='utf-8') as file:
+        writer = csv.DictWriter(file, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(data)
+    
+    print(f"Data has been written to {filename}")
 
-def process_repository(repo):
-    """Process a single repository and fetch package metadata in parallel."""
-    repo_key = repo['key']
-    repo_type = repo['type']
-    print(f"Processing repository: {repo_key} (Type: {repo_type})")
-
-    packages = fetch_packages(repo_key)
-    report_data = []
-
-    # Use ThreadPoolExecutor to fetch package metadata in parallel
-    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-        futures = []
-        for pkg in packages:
-            package_path = pkg['uri'][1:]  # Remove leading slash
-            futures.append(
-                executor.submit(extract_package_info, repo_key, package_path, repo_type)
-            )
-
-        for future in as_completed(futures):
-            package_info = future.result()
-            if package_info:
-                report_data.append(package_info)
-
-    return report_data
-
+# Main function to process all repositories
 def main():
-    # Fetch all repositories
+    """
+    Main function to process all repositories and extract metadata.
+    """
     repositories = fetch_repositories()
-    if not repositories:
-        return
+    all_repo_details = []
 
-    report_data = []
-
-    # Process repositories sequentially (but fetch packages in parallel)
     for repo in repositories:
-        report_data.extend(process_repository(repo))
+        repo_name = repo.get("key")
+        package_type = repo.get("packageType", "")  # Dynamically fetch the package type
+        print(f"Processing repository: {repo_name} (Type: {package_type})")
 
-    # Save the report to CSV
-    save_to_csv(report_data, CSV_FILE)
-    print(f"Report saved to {CSV_FILE}")
+        # Process all repositories (not just Docker)
+        repo_details = process_repository(repo_name, package_type)
+        all_repo_details.extend(repo_details)
+
+    # Save all details to CSV with a dynamic file name
+    current_date = datetime.now().strftime('%Y-%m-%d')  # Current date in YYYY-MM-DD format
+    output_file = f"EV_EOL_{current_date}_all_packages.csv"  # Save reports for all package types
+    save_to_csv(all_repo_details, output_file)
 
 if __name__ == '__main__':
     main()
@@ -134,55 +180,30 @@ if __name__ == '__main__':
 
 ---
 
-### Key Changes for Speed Improvement:
-1. **Parallel Processing**:
-   - The `ThreadPoolExecutor` is used to fetch package metadata concurrently.
-   - Each package's metadata is fetched in a separate thread, allowing multiple HTTP requests to run in parallel.
+### Key Changes:
+1. **Dynamic Package Type Handling**:
+   - The `extract_package_info` function now handles different package types (e.g., Docker, npm, NuGet, Generic, Helm, Terraform) and extracts the package name and version based on the repository type.
 
-2. **Thread Pool Size**:
-   - The `MAX_THREADS` variable controls the number of concurrent threads. You can adjust this based on your system's capabilities and network bandwidth.
+2. **Generalized Logic**:
+   - The script processes **all package types**, not just Docker.
+   - The logic for extracting package names and versions is tailored to the structure of each package type.
 
-3. **Efficient Repository Processing**:
-   - Repositories are processed sequentially, but packages within each repository are processed in parallel.
-
----
-
-### Performance Considerations:
-- **Network Latency**:
-  - The script's performance is heavily dependent on network latency and the Artifactory server's response time.
-  - Parallel processing reduces the total time by overlapping network requests.
-
-- **Thread Pool Size**:
-  - Increasing `MAX_THREADS` can speed up the script, but too many threads may overwhelm the Artifactory server or your network.
-  - Start with a small number (e.g., 10) and gradually increase it while monitoring performance.
-
-- **Error Handling**:
-  - If a request fails, the script logs the error and continues processing other packages.
+3. **CSV Output**:
+   - The CSV file now includes metadata for **all package types**.
 
 ---
 
 ### Example Output (CSV):
-| Repo Name   | Package Type | Package Name     | Version | URL                                      | Created Date       |
-|-------------|--------------|------------------|---------|------------------------------------------|--------------------|
-| npm-repo    | npm          | my-package       | 1.2.3   | https://artifactory/.../my-package-1.2.3 | 2023-10-01 12:34:56 |
-| docker-repo | docker       | my-image         | latest  | https://artifactory/.../my-image-latest  | N/A                |
-| helm-repo   | helm         | my-chart         | 0.1.0   | https://artifactory/.../my-chart-0.1.0   | 2023-09-29 14:15:16 |
+| repo_name   | package_type | package_name     | version | url                                      | created_date       | license | secarch | artifactory_instance   |
+|-------------|--------------|------------------|---------|------------------------------------------|--------------------|---------|---------|------------------------|
+| npm-repo    | npm          | my-package       | 1.2.3   | https://frigate.jfrog.io/.../my-package  | 2023-10-01 12:34:56 |         |         | frigate.jfrog.io       |
+| docker-repo | Docker       | my-image         | latest  | https://frigate.jfrog.io/.../my-image    | 2023-09-30 10:11:12 |         |         | frigate.jfrog.io       |
+| helm-repo   | Helm         | my-chart         | 0.1.0   | https://frigate.jfrog.io/.../my-chart    | 2023-09-29 14:15:16 |         |         | frigate.jfrog.io       |
 
 ---
 
-### Additional Optimization Tips:
-1. **Batch Requests**:
-   - If the Artifactory API supports batch requests, you can fetch metadata for multiple packages in a single request.
+### Notes:
+- The script assumes that the package structure follows standard conventions for each package type. If your Artifactory instance uses a custom structure, you may need to adjust the `extract_package_info` function.
+- If you encounter any issues with specific package types, let me know, and I can help refine the logic further.
 
-2. **Caching**:
-   - Cache metadata for packages that don’t change frequently to avoid redundant requests.
-
-3. **Pagination**:
-   - If the repository contains a large number of packages, implement pagination to fetch packages in smaller batches.
-
-4. **Asynchronous Requests**:
-   - For even better performance, consider using an asynchronous HTTP library like `aiohttp` instead of `requests`.
-
----
-
-Let me know if you need further assistance or additional optimizations!
+Let me know if you need additional assistance!
