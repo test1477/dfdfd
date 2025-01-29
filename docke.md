@@ -1,187 +1,215 @@
-Here's the updated `jfrog_report.py` script with the corrected AQL query, improved error handling, and better logging. This script will:  
+To update the `jfrog_report.py` script and integrate it into your GitHub Actions workflow, we will make the following changes:
 
-1. Fetch Docker package metadata from JFrog Artifactory.  
-2. Filter and process only Docker repositories.  
-3. Generate a CSV report and save it in the appropriate folder based on the organization (`ev` or `ppa`).  
-4. Run via GitHub Actions daily at **9 AM** and upload reports to JFrog Artifactory.  
+1. **Handle Multiple Organizations:**
+   - Update the script to accept the organization (`--org`) as a command-line argument.
+   - Fetch the JFrog URL and API key dynamically based on the organization name.
 
----
+2. **Adapt to the GitHub Actions Workflow:**
+   - The workflow will pass the environment variables for the API key and JFrog URL, so the script will use these to make API requests.
 
-### **📜 Updated `jfrog_report.py`**
+Here is the updated `jfrog_report.py` script that supports multiple organizations and accepts command-line arguments for the organization, JFrog URL, and output directory.
+
+### Updated `jfrog_report.py` Script:
+
 ```python
+import os
 import requests
 import csv
-import os
-import argparse
+import warnings
+from urllib.parse import urljoin
 from datetime import datetime
+import argparse
 
-# Function to fetch package metadata from JFrog Artifactory
-def get_artifactory_packages(jfrog_url, api_key, repo_name):
-    """
-    Fetch package metadata from JFrog Artifactory using AQL query.
-    """
-    headers = {
-        "X-JFrog-Art-Api": api_key,
-        "Content-Type": "text/plain"
-    }
-    url = f"{jfrog_url}/api/search/aql"
-    
-    query = f'items.find({{"repo": "{repo_name}"}}).include("repo", "path", "name", "created", "size")'
+# Suppress SSL verification warnings
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+warnings.simplefilter('ignore', InsecureRequestWarning)
 
-    response = requests.post(url, headers=headers, data=query)
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description="Generate JFrog reports for multiple organizations.")
+parser.add_argument('--org', required=True, help="The organization name (e.g., 'ev' or 'ppa').")
+parser.add_argument('--jfrog-url', required=True, help="The JFrog Artifactory URL.")
+parser.add_argument('--output', required=True, help="The output directory for the generated report.")
+args = parser.parse_args()
+
+# Get JFrog Artifactory instance details
+JFROG_URL = args.jfrog_url
+ARTIFACTORY_TOKEN = os.getenv(f'JFROG_API_KEY_{args.org.upper()}')  # Get API key for the given organization
+
+if not ARTIFACTORY_TOKEN:
+    print(f"Error: JFROG_API_KEY_{args.org.upper()} is not set in environment variables.")
+    exit(1)
+
+# Headers for the API request
+headers = {
+    'Authorization': f'Bearer {ARTIFACTORY_TOKEN}',
+    'Accept': 'application/json',
+}
+
+# Function to fetch all repositories
+def fetch_repositories():
+    """
+    Fetches a list of all repositories in the Artifactory instance.
+    """
+    url = f"{JFROG_URL}/api/repositories"
+    response = requests.get(url, headers=headers, verify=False)
+
     if response.status_code == 200:
-        return response.json().get('results', [])
+        return response.json()
     else:
-        print(f"Error fetching data: {response.text}")
+        print(f"Failed to fetch repositories: {response.status_code}")
         return []
 
-# Function to generate report
-def generate_report(org, jfrog_url, api_key, output_folder):
+# Function to list all artifacts in a repository
+def list_artifacts(repo_name):
     """
-    Fetches Docker packages from JFrog Artifactory and generates a CSV report.
+    Recursively fetches all artifacts in the specified repository.
     """
-    repo_list = ["docker-repo"]  # Add more Docker repositories if needed
-    all_packages = []
+    url = f"{JFROG_URL}/api/storage/{repo_name}?list&deep=1"
+    response = requests.get(url, headers=headers, verify=False)
 
-    for repo in repo_list:
-        print(f"Fetching data from repository: {repo}")
-        packages = get_artifactory_packages(jfrog_url, api_key, repo)
-        for pkg in packages:
-            package_name = pkg.get("path", "")  # Repository path as package_name
-            version = pkg.get("name", "")  # Version (image tag)
-            created_date = pkg.get("created", "")
-            repo_name = pkg.get("repo", "")
-            size = pkg.get("size", "")
+    if response.status_code == 200:
+        return response.json().get("files", [])
+    else:
+        print(f"Failed to list artifacts for {repo_name}: {response.status_code}")
+        return []
 
-            all_packages.append([
-                repo_name, package_name, "Docker", version, 
-                f"{jfrog_url}/artifactory/{repo}/{package_name}/{version}", 
-                created_date, "", "", "frigate.jfrog.io"
-            ])
+# Function to process repository artifacts without extra API calls
+def process_repository(repo_name, package_type):
+    """
+    Processes all artifacts in a repository using batch metadata from the recursive listing.
+    """
+    artifact_list = list_artifacts(repo_name)
+    repo_details = []
 
-    # Ensure output directory exists
-    os.makedirs(output_folder, exist_ok=True)
+    for artifact in artifact_list:
+        artifact_path = artifact.get("uri", "")
+        artifact_url = urljoin(f"{JFROG_URL}/{repo_name}", artifact_path)
+        created_date = artifact.get("lastModified", "")
+
+        # Parse package name and version from artifact path
+        segments = artifact_path.strip("/").split("/")
+        if len(segments) >= 2:
+            package_name = f"{repo_name}/{'/'.join(segments[:-2])}"  # Up to the version folder
+            version = segments[-2]  # Second-to-last segment
+        else:
+            package_name = repo_name
+            version = ""
+
+        # Append details only for Docker repositories
+        if package_type == "Docker":
+            repo_details.append({
+                "repo_name": repo_name,
+                "package_type": package_type,
+                "package_name": package_name,
+                "version": version,
+                "url": artifact_url,
+                "created_date": created_date,
+                "license": "",  # Leave blank if not available
+                "secarch": "",  # Leave blank if not available
+                "artifactory_instance": "frigate.jfrog.io"
+            })
     
-    # Define CSV file name
-    report_filename = f"{output_folder}/EV_EOL_{datetime.now().strftime('%Y-%m-%d')}.csv"
+    return repo_details
+
+# Function to save data to CSV
+def save_to_csv(data, filename):
+    """
+    Saves extracted metadata to a CSV file.
+    """
+    headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'license', 'secarch', 'artifactory_instance']
     
-    # Write data to CSV
-    with open(report_filename, mode="w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["repo_name", "package_name", "package_type", "version", "url", "created_date", "license", "secarch", "artifactory_instance"])
-        writer.writerows(all_packages)
+    with open(filename, mode='w', newline='', encoding='utf-8') as file:
+        writer = csv.DictWriter(file, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(data)
     
-    print(f"Report saved: {report_filename}")
+    print(f"Data has been written to {filename}")
 
-# Main Execution
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Fetch Docker package reports from JFrog Artifactory")
-    parser.add_argument("--org", required=True, help="Organization name (ev or ppa)")
-    parser.add_argument("--jfrog-url", required=True, help="JFrog Artifactory URL")
-    parser.add_argument("--output", required=True, help="Output folder for reports")
+# Main function to process all repositories
+def main():
+    """
+    Main function to process all repositories and extract metadata.
+    """
+    repositories = fetch_repositories()
+    all_repo_details = []
 
-    args = parser.parse_args()
+    for repo in repositories:
+        repo_name = repo.get("key")
+        package_type = repo.get("packageType", "")  # Dynamically fetch the package type
+        print(f"Processing repository: {repo_name} (Type: {package_type})")
 
-    JFROG_API_KEY = os.getenv("JFROG_API_KEY")
-    if not JFROG_API_KEY:
-        print("Error: JFROG_API_KEY is not set")
-        exit(1)
+        # Process only Docker repositories
+        if package_type == "Docker":
+            repo_details = process_repository(repo_name, package_type)
+            all_repo_details.extend(repo_details)
 
-    generate_report(args.org, args.jfrog_url, JFROG_API_KEY, args.output)
+    # Save all details to CSV with a dynamic file name
+    current_date = datetime.now().strftime('%Y-%m-%d')  # Current date in YYYY-MM-DD format
+    output_file = os.path.join(args.output, f"EV_EOL_{current_date}_docker.csv")  # Save only Docker reports
+    save_to_csv(all_repo_details, output_file)
+
+if __name__ == '__main__':
+    main()
 ```
----
 
-### **📌 GitHub Actions Workflow (`.github/workflows/jfrog_report.yml`)**
+### Workflow (`.github/workflows/generate_jfrog_reports.yml`):
+
 ```yaml
-name: JFrog Docker Report
+name: Generate JFrog Reports
 
 on:
   schedule:
     - cron: "0 9 * * *"  # Runs daily at 9 AM UTC
-  workflow_dispatch:
+  workflow_dispatch:  # Allows manual triggering
 
 jobs:
-  fetch-and-upload:
+  generate-report:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: Set up Python
+      - name: Set Up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.12"
+          python-version: "3.9"
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: pip install requests
 
-      - name: Fetch JFrog Reports for EV
-        run: python jfrog_report.py --org ev --jfrog-url ${{ secrets.JFROG_URL_EV }} --output reports/ev
+      - name: Run Report Script for EV
         env:
-          JFROG_API_KEY: ${{ secrets.JFROG_API_KEY_EV }}
+          JFROG_API_KEY_EV: ${{ secrets.JFROG_API_KEY_EV }}
+        run: |
+          python jfrog_report.py --org ev --jfrog-url "https://frigate.jfrog.io/artifactory" --output reports/ev
 
-      - name: Fetch JFrog Reports for PPA
-        run: python jfrog_report.py --org ppa --jfrog-url ${{ secrets.JFROG_URL_PPA }} --output reports/ppa
+      - name: Run Report Script for PPA
         env:
-          JFROG_API_KEY: ${{ secrets.JFROG_API_KEY_PPA }}
-
-      - name: Upload Reports to JFrog Artifactory (EV)
+          JFROG_API_KEY_PPA: ${{ secrets.JFROG_API_KEY_PPA }}
         run: |
-          curl -u "apikey:${{ secrets.JFROG_API_KEY_EV }}" -T reports/ev/EV_EOL_$(date +%Y-%m-%d).csv ${{ secrets.JFROG_URL_EV }}/artifactory/reports/ev/
+          python jfrog_report.py --org ppa --jfrog-url "https://ppa.jfrog.io/artifactory" --output reports/ppa
 
-      - name: Upload Reports to JFrog Artifactory (PPA)
+      - name: Upload Reports to JFrog (EV)
         run: |
-          curl -u "apikey:${{ secrets.JFROG_API_KEY_PPA }}" -T reports/ppa/EV_EOL_$(date +%Y-%m-%d).csv ${{ secrets.JFROG_URL_PPA }}/artifactory/reports/ppa/
+          curl -H "X-JFrog-Art-Api:${{ secrets.JFROG_API_KEY_EV }}" -T reports/ev/EV_EOL_$(date +%F).csv "https://frigate.io/artifactory/reports/ev/EV_EOL_$(date +%F).csv"
+
+      - name: Upload Reports to JFrog (PPA)
+        run: |
+          curl -H "X-JFrog-Art-Api:${{ secrets.JFROG_API_KEY_PPA }}" -T reports/ppa/EV_EOL_$(date +%F).csv "https://ppa.jfrog.io/artifactory/reports/ppa/EV_EOL_$(date +%F).csv"
 ```
----
 
-### **🛠 How It Works**
-1. **Daily GitHub Action Run**  
-   - At **9 AM UTC**, it runs the Python script twice (for `ev` and `ppa`).  
+### Key Updates:
+1. **Python Script:**
+   - The `jfrog_report.py` script now accepts command-line arguments for the organization (`--org`), JFrog URL (`--jfrog-url`), and output directory (`--output`).
+   - It dynamically fetches the API key based on the organization (`JFROG_API_KEY_EV` or `JFROG_API_KEY_PPA`) using `os.getenv()`.
 
-2. **Fetching Data from JFrog**  
-   - Uses **AQL Query** to fetch **Docker package metadata**.  
+2. **GitHub Actions Workflow:**
+   - The workflow triggers the report generation for both `ev` and `ppa` organizations.
+   - It uploads the generated reports to the respective JFrog Artifactory locations.
 
-3. **Generating CSV Report**  
-   - Saves output as:  
-     - `reports/ev/EV_EOL_YYYY-MM-DD.csv`
-     - `reports/ppa/EV_EOL_YYYY-MM-DD.csv`  
+### Next Steps:
+1. **Add API Keys:** Ensure you have the JFrog API keys (`JFROG_API_KEY_EV` and `JFROG_API_KEY_PPA`) stored as GitHub Secrets.
+2. **Push the Changes:** Commit and push the updated Python script and workflow to your GitHub repository.
+3. **Run the Workflow:** The workflow will run automatically based on the cron schedule or can be triggered manually.
 
-4. **Uploading Reports to JFrog**  
-   - Uses `curl` to push CSV files to  
-     - `frigate.io/reports/ev/`
-     - `frigate.io/reports/ppa/`  
-
----
-
-### **✅ Fixes & Improvements**
-✅ **Fixed AQL query syntax**  
-✅ **Ensures API key is passed securely**  
-✅ **Automatically names report file (`EV_EOL_YYYY-MM-DD.csv`)**  
-✅ **Filters only Docker repositories**  
-✅ **Removes `N/A`, replaces with blank fields**  
-✅ **Runs on GitHub Actions daily at 9 AM**  
-✅ **Uploads reports to JFrog Artifactory**  
-
----
-
-### **🚀 Next Steps**
-1. **Add API keys & JFrog URLs in GitHub Secrets**
-   - `JFROG_API_KEY_EV`
-   - `JFROG_API_KEY_PPA`
-   - `JFROG_URL_EV`
-   - `JFROG_URL_PPA`
-
-2. **Commit & Push Changes**
-   ```sh
-   git add .
-   git commit -m "Automate JFrog Docker Reports"
-   git push origin main
-   ```
-
-3. **Check Workflow Logs** on GitHub Actions.  
-
----
-
-This should now **run efficiently** and **upload Docker reports correctly**! 🚀 Let me know if you need further tweaks.
+Let me know if you need any further adjustments!
