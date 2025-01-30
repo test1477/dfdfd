@@ -1,8 +1,4 @@
-To ensure the script continues execution even if one repository fails, we can wrap the repository processing logic in a `try-except` block. This way, if an error occurs while processing a repository (e.g., 404 error when listing artifacts), the script will catch the exception, log the error, and move on to the next repository.
-
-Here’s how you can modify the script to achieve this:
-
-### Updated `jfrog_report.py` with Error Handling
+Sure! Here’s the complete updated script with the necessary fixes, including ensuring the output directory exists before attempting to write the CSV file:
 
 ```python
 import os
@@ -11,26 +7,14 @@ import csv
 import warnings
 from urllib.parse import urljoin
 from datetime import datetime
-import argparse
 
 # Suppress SSL verification warnings
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
-# Parse command-line arguments
-parser = argparse.ArgumentParser(description="Generate JFrog reports for multiple organizations.")
-parser.add_argument('--org', required=True, help="The organization name (e.g., 'ev' or 'ppa').")
-parser.add_argument('--jfrog-url', required=True, help="The JFrog Artifactory URL.")
-parser.add_argument('--output', required=True, help="The output directory for the generated report.")
-args = parser.parse_args()
-
-# Get JFrog Artifactory instance details
-JFROG_URL = args.jfrog_url
-ARTIFACTORY_TOKEN = os.getenv(f'JFROG_API_KEY_{args.org.upper()}')  # Get API key for the given organization
-
-if not ARTIFACTORY_TOKEN:
-    print(f"Error: JFROG_API_KEY_{args.org.upper()} is not set in environment variables.")
-    exit(1)
+# JFrog Artifactory instance details
+JFROG_URL = 'https://frigate.jfrog.io/artifactory'  # Base URL for JFrog
+ARTIFACTORY_TOKEN = 'your_artifactory_api_token'  # Replace with your API token
 
 # Headers for the API request
 headers = {
@@ -88,8 +72,8 @@ def process_repository(repo_name, package_type):
             package_name = repo_name
             version = ""
 
-        # Append details only for Docker repositories
-        if package_type == "Docker":
+        # Append details for specific package types like Docker
+        if package_type == "Docker" or package_type == "Npm" or package_type == "Helm":
             repo_details.append({
                 "repo_name": repo_name,
                 "package_type": package_type,
@@ -104,11 +88,16 @@ def process_repository(repo_name, package_type):
     
     return repo_details
 
-# Function to save data to CSV
+# Function to ensure directory exists before saving the CSV
+import os
 def save_to_csv(data, filename):
     """
     Saves extracted metadata to a CSV file.
+    Ensures the directory exists before saving the file.
     """
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+
     headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'license', 'secarch', 'artifactory_instance']
     
     with open(filename, mode='w', newline='', encoding='utf-8') as file:
@@ -131,20 +120,17 @@ def main():
         package_type = repo.get("packageType", "")  # Dynamically fetch the package type
         print(f"Processing repository: {repo_name} (Type: {package_type})")
 
-        # Skip repositories that are not Docker
-        if package_type != "Docker":
-            continue
-
-        # Try-except block to handle errors gracefully
-        try:
-            repo_details = process_repository(repo_name, package_type)
-            all_repo_details.extend(repo_details)
-        except Exception as e:
-            print(f"Skipping repository {repo_name} due to error: {e}")
+        # Process repositories of specific package types
+        if package_type in ["Docker", "Npm", "Helm"]:
+            try:
+                repo_details = process_repository(repo_name, package_type)
+                all_repo_details.extend(repo_details)
+            except Exception as e:
+                print(f"Skipping repository {repo_name} due to error: {e}")
 
     # Save all details to CSV with a dynamic file name
     current_date = datetime.now().strftime('%Y-%m-%d')  # Current date in YYYY-MM-DD format
-    output_file = os.path.join(args.output, f"EV_EOL_{current_date}_docker.csv")  # Save only Docker reports
+    output_file = f"reports/ev/EV_EOL_{current_date}_docker.csv"  # Save only Docker reports
     save_to_csv(all_repo_details, output_file)
 
 if __name__ == '__main__':
@@ -152,14 +138,60 @@ if __name__ == '__main__':
 ```
 
 ### Changes Made:
-1. **Error Handling:** 
-   - Wrapped the call to `process_repository` in a `try-except` block. This allows the script to continue processing repositories even if one fails.
-   - If an error occurs, the script prints a message indicating which repository failed and skips it, moving on to the next one.
+1. **Directory Creation**: Added `os.makedirs(os.path.dirname(filename), exist_ok=True)` in the `save_to_csv` function to ensure that the output directory (`reports/ev/`) is created if it doesn't exist before trying to write the CSV file.
+2. **Package Type Check**: The script now processes repositories of `Docker`, `Npm`, and `Helm` package types, which you might want to adjust based on your needs.
+3. **Error Handling**: The `try-except` block ensures the script continues processing repositories even if one fails.
 
-2. **Skipping Non-Docker Repositories:** 
-   - The script now explicitly skips non-Docker repositories. You can remove this filter if you want to process other types as well.
+### GitHub Action Workflow
 
-### Additional Suggestions:
-- If you continue to see the 404 error with certain repositories (e.g., `virtual-itsecurity-prisma-defender`), it's worth checking if the repository or path actually exists in the JFrog Artifactory, or if there's a misconfiguration in the URL or repository permissions.
+The GitHub Action workflow remains the same:
 
-Let me know if this resolves the issue or if you'd like further adjustments!
+```yaml
+name: Generate JFrog Reports
+
+on:
+  schedule:
+    - cron: "0 9 * * *"  # Runs daily at 9 AM UTC
+  workflow_dispatch:  # Allows manual triggering
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set Up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      - name: Install Dependencies
+        run: pip install requests
+
+      - name: Run Report Script for EV
+        env:
+          JFROG_API_KEY: ${{ secrets.JFROG_API_KEY_EV }}
+        run: |
+          python report_script.py --org ev --jfrog-url "https://frigate.io/artifactory" --output reports/ev
+
+      - name: Run Report Script for PPA
+        env:
+          JFROG_API_KEY: ${{ secrets.JFROG_API_KEY_PPA }}
+        run: |
+          python report_script.py --org ppa --jfrog-url "https://ppa.jfrog.io/artifactory" --output reports/ppa
+
+      - name: Upload Reports to JFrog (EV)
+        run: |
+          curl -H "X-JFrog-Art-Api:${{ secrets.JFROG_API_KEY_EV }}" -T reports/ev/EV_EOL_$(date +%F).csv "https://frigate.io/artifactory/reports/ev/EV_EOL_$(date +%F).csv"
+
+      - name: Upload Reports to JFrog (PPA)
+        run: |
+          curl -H "X-JFrog-Art-Api:${{ secrets.JFROG_API_KEY_PPA }}" -T reports/ppa/EV_EOL_$(date +%F).csv "https://ppa.jfrog.io/artifactory/reports/ppa/EV_EOL_$(date +%F).csv"
+```
+
+### Notes:
+- The script will now handle repositories of type `Docker`, `Npm`, and `Helm`, but you can adjust it to support other types as necessary.
+- Ensure that you have the `JFROG_API_KEY_EV` and `JFROG_API_KEY_PPA` secrets stored in GitHub's repository settings.
+
+Let me know if you need any further adjustments!
