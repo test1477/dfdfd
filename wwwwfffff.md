@@ -1,4 +1,4 @@
-To update the "Get Raw URL(s)" step for Octopus CLI 2.14.0, you need to make a few changes. Here's the updated version:
+Using the approach you mentioned is a reasonable choice, especially if file updates are infrequent (once every 1-2 months). Here's how you can implement it in your workflow:
 
 ```yaml
 - name: Get Raw URL(s) and Create Release
@@ -13,9 +13,12 @@ To update the "Get Raw URL(s)" step for Octopus CLI 2.14.0, you need to make a f
       if [[ $file != *.car ]]; then
         continue
       fi
-      filename="${file//\//%20}"
-      raw_url="https://raw.githubusercontent.com/Eaton-Vance-Corp/Tibco/${{ github.sha }}/$file"
-      echo "Raw URL: $raw_url"
+      filename="${file// /%20}"
+      raw_url=$(curl -sS -L -X GET "https://api.github.com/repos/Eaton-Vance-Corp/Tibco/contents/$filename" \
+        -H "Authorization: token $GITHUB_TOKEN" \
+        -H "Accept: application/vnd.github.v3+json")
+      download_url=$(echo "$raw_url" | jq -r '.download_url')
+      echo "Raw URL: $download_url"
       
       octopus release create \
         --project "Tibco" \
@@ -29,31 +32,10 @@ To update the "Get Raw URL(s)" step for Octopus CLI 2.14.0, you need to make a f
     done
 ```
 
-Key changes:
-
-1. The raw URL is now constructed directly using the repository name, commit SHA, and file path, eliminating the need for a separate API call[1].
-
-2. The `octo` command has been replaced with `octopus`, and the command structure has been updated to match the new CLI syntax[3][5].
-
-3. The `create-release` command now uses hyphens instead of equals signs for its arguments[7].
-
-4. The `--deployTo` flag is used instead of `--deployto` for consistency with the new CLI syntax[7].
-
-5. The `--releaseNotes` flag is used instead of `--releasenotes`[7].
-
-6. Environment variables are used for sensitive information like `GITHUB_TOKEN` and `OCTO_API_KEY`[2].
-
-These changes should resolve the issues with getting the raw URL and create a release using the updated Octopus CLI 2.14.0[5].
+This method fetches the raw URL for each file using the GitHub API, which is suitable for repositories with infrequent updates[1].
 
 Citations:
-[1] https://github.com/orgs/community/discussions/22537
-[2] https://github.com/OctopusDeploy/install-octopus-cli-action/issues/450
-[3] https://github.com/OctopusDeploy/cli
-[4] https://git-scm.com/docs/user-manual
-[5] https://github.com/OctopusDeploy/cli/releases
-[6] https://github.com/OctopusDeploy/install-octopus-cli-action/blob/main/src/octopus-cli.ts
-[7] https://octopus.com/docs/octopus-rest-api/octopus-cli
-[8] https://formulae.brew.sh/formula/
+[1] https://api.github.com/repos/Eaton-Vance-Corp/Tibco/contents/
 
 ---
 Answer from Perplexity: pplx.ai/share
