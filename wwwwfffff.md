@@ -1,28 +1,13 @@
-The issue persists because there is still a formatting error in the repository line in `/etc/apt/sources.list.d/octopus.com.list`. Specifically, the problem lies in the **missing space** between the URL (`https://apt.octopus.com/stable/`) and the component (`main`). The line:
+The piece of code you provided earlier was working because it used the older `apt-key` method for adding GPG keys, which is now deprecated in newer versions of Ubuntu and Debian. The newer versions of these distributions recommend using the `signed-by` method instead of `apt-key`.
 
-```
-deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/main
-```
-
-is incorrect because there is no space between `stable/` and `main`. The correct format requires a space:
-
-```
-deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
-```
+However, if the older method worked for you and you want to revert to it, you can use the following workflow. Note that this is not recommended for long-term use, as `apt-key` is deprecated and may be removed in future versions.
 
 ---
 
-### **Fix**
-Update the repository line to include the required space between the URL and the component.
-
----
-
-### **Updated Workflow**
-
-Here’s the corrected GitHub Actions workflow:
+### **Workflow Using `apt-key` (Deprecated Method)**
 
 ```yaml
-name: Octo CLI Install Test
+name: Install Octo.exe
 
 on:
   workflow_dispatch:
@@ -43,11 +28,11 @@ jobs:
         sudo apt update
         sudo apt install --no-install-recommends gnupg curl ca-certificates apt-transport-https -y
 
-        # Download and add the Octopus Deploy GPG key (without displaying it on the terminal)
-        curl -sSfL https://apt.octopus.com/public.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/octopus.gpg
+        # Add the Octopus Deploy GPG key using the deprecated apt-key method
+        curl -sSfL https://apt.octopus.com/public.key | sudo apt-key add -
 
-        # Add the Octopus repository entry to the apt sources list (correct format)
-        echo "deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main" | sudo tee /etc/apt/sources.list.d/octopus.com.list
+        # Add the Octopus repository entry to the apt sources list
+        sudo sh -c "echo deb https://apt.octopus.com/stable/ main > /etc/apt/sources.list.d/octopus.com.list"
 
         # Update the package list again to include the Octopus repository
         sudo apt update
@@ -63,18 +48,47 @@ jobs:
 
 ---
 
-### **Key Fix**
-The repository line is now correctly formatted with a space between the URL and the component:
+### **Key Differences**
+1. **GPG Key Handling**:
+   - The GPG key is added using the deprecated `apt-key` method:
+     ```bash
+     curl -sSfL https://apt.octopus.com/public.key | sudo apt-key add -
+     ```
 
-```
-deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
-```
+2. **Repository Entry**:
+   - The repository entry is added directly to `/etc/apt/sources.list.d/octopus.com.list` using `sudo sh -c`:
+     ```bash
+     sudo sh -c "echo deb https://apt.octopus.com/stable/ main > /etc/apt/sources.list.d/octopus.com.list"
+     ```
+
+3. **No `signed-by` Option**:
+   - The `signed-by` option is not used, as the key is added globally using `apt-key`.
 
 ---
 
-### **Debugging Steps**
-If the error persists, follow these steps to debug:
+### **Why This Works**
+- The `apt-key` method adds the GPG key to a global keyring, which allows APT to verify packages from the Octopus repository.
+- The repository line is correctly formatted with a space between the URL (`https://apt.octopus.com/stable/`) and the component (`main`).
 
+---
+
+### **Why This is Not Recommended**
+- **`apt-key` is Deprecated**:
+  - The `apt-key` command is deprecated in newer versions of Ubuntu and Debian. It may be removed in future releases.
+  - Using `apt-key` adds the GPG key to a global keyring, which is less secure than associating the key with a specific repository using the `signed-by` option.
+
+- **Security Risks**:
+  - Global keyrings can lead to security vulnerabilities, as any repository using the same key can be trusted by APT.
+
+---
+
+### **Recommended Approach**
+If possible, use the `signed-by` method as shown in the earlier workflows. However, if you need a quick fix and are using an environment where `apt-key` still works, the above workflow will resolve the issue.
+
+---
+
+### **Debugging Tips**
+If the issue persists:
 1. **Check the Repository File**:
    - Verify the contents of `/etc/apt/sources.list.d/octopus.com.list`:
      ```bash
@@ -82,13 +96,13 @@ If the error persists, follow these steps to debug:
      ```
    - Ensure it contains:
      ```
-     deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
+     deb https://apt.octopus.com/stable/ main
      ```
 
-2. **Check the GPG Key File**:
-   - Verify that the GPG key file exists:
+2. **Check the GPG Key**:
+   - Verify that the GPG key was added successfully:
      ```bash
-     ls -l /etc/apt/trusted.gpg.d/octopus.gpg
+     sudo apt-key list
      ```
 
 3. **Manually Run `sudo apt update`**:
@@ -97,38 +111,12 @@ If the error persists, follow these steps to debug:
      sudo apt update
      ```
 
-4. **Check for Extra Spaces or Characters**:
-   - Ensure there are no extra spaces, invisible characters, or line breaks in the repository file. You can use `cat -A` to display hidden characters:
-     ```bash
-     cat -A /etc/apt/sources.list.d/octopus.com.list
-     ```
-
 ---
 
 ### **Expected Outcome**
-- The malformed entry error will be resolved.
 - The Octopus CLI will be installed successfully.
 - The `octo --version` command will confirm the installation.
 
 ---
 
-### **Additional Notes**
-- The warning about `114 packages can be upgraded` is unrelated to the Octopus CLI installation. It simply indicates that there are system packages that can be upgraded. You can ignore this for now, or add a step to upgrade all packages:
-  ```bash
-  sudo apt upgrade -y
-  ```
-
-- The warning `WARNING: apt does not have a stable CLI interface` is a general notice from APT and does not affect the functionality of the workflow.
-
----
-
-### **Final Check**
-If the issue still persists, please share the exact contents of `/etc/apt/sources.list.d/octopus.com.list` and the output of the following commands:
-
-```bash
-cat /etc/apt/sources.list.d/octopus.com.list
-ls -l /etc/apt/trusted.gpg.d/octopus.gpg
-sudo apt update
-```
-
-This will help me diagnose the problem further. Let me know!
+Let me know if you encounter any further issues!
