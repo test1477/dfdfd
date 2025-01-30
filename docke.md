@@ -1,8 +1,9 @@
-Here's the **updated full script** with the fix to ensure the output directory exists before saving the CSV file. It also includes better error handling to skip repositories if an error occurs and logs skipped repositories in the GitHub Actions output.  
+To ensure the script continues execution even if one repository fails, we can wrap the repository processing logic in a `try-except` block. This way, if an error occurs while processing a repository (e.g., 404 error when listing artifacts), the script will catch the exception, log the error, and move on to the next repository.
 
----
+Here’s how you can modify the script to achieve this:
 
-### **Updated `jfrog_report.py`**
+### Updated `jfrog_report.py` with Error Handling
+
 ```python
 import os
 import requests
@@ -65,7 +66,7 @@ def list_artifacts(repo_name):
         print(f"Failed to list artifacts for {repo_name}: {response.status_code}")
         return []
 
-# Function to process repository artifacts
+# Function to process repository artifacts without extra API calls
 def process_repository(repo_name, package_type):
     """
     Processes all artifacts in a repository using batch metadata from the recursive listing.
@@ -106,18 +107,15 @@ def process_repository(repo_name, package_type):
 # Function to save data to CSV
 def save_to_csv(data, filename):
     """
-    Saves extracted metadata to a CSV file, ensuring the directory exists.
+    Saves extracted metadata to a CSV file.
     """
     headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'license', 'secarch', 'artifactory_instance']
-
-    # Ensure the output directory exists
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
-
+    
     with open(filename, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=headers)
         writer.writeheader()
         writer.writerows(data)
-
+    
     print(f"Data has been written to {filename}")
 
 # Main function to process all repositories
@@ -127,56 +125,41 @@ def main():
     """
     repositories = fetch_repositories()
     all_repo_details = []
-    skipped_repos = []  # List to store skipped repositories
 
     for repo in repositories:
         repo_name = repo.get("key")
         package_type = repo.get("packageType", "")  # Dynamically fetch the package type
         print(f"Processing repository: {repo_name} (Type: {package_type})")
 
+        # Skip repositories that are not Docker
+        if package_type != "Docker":
+            continue
+
+        # Try-except block to handle errors gracefully
         try:
-            # Process only Docker repositories
-            if package_type == "Docker":
-                repo_details = process_repository(repo_name, package_type)
-                all_repo_details.extend(repo_details)
+            repo_details = process_repository(repo_name, package_type)
+            all_repo_details.extend(repo_details)
         except Exception as e:
             print(f"Skipping repository {repo_name} due to error: {e}")
-            skipped_repos.append(repo_name)  # Store skipped repo names
 
     # Save all details to CSV with a dynamic file name
     current_date = datetime.now().strftime('%Y-%m-%d')  # Current date in YYYY-MM-DD format
     output_file = os.path.join(args.output, f"EV_EOL_{current_date}_docker.csv")  # Save only Docker reports
     save_to_csv(all_repo_details, output_file)
 
-    # Log skipped repositories in GitHub Actions output
-    if skipped_repos:
-        print("\nSkipped repositories due to errors:")
-        for repo in skipped_repos:
-            print(f"- {repo}")
-
 if __name__ == '__main__':
     main()
 ```
 
----
+### Changes Made:
+1. **Error Handling:** 
+   - Wrapped the call to `process_repository` in a `try-except` block. This allows the script to continue processing repositories even if one fails.
+   - If an error occurs, the script prints a message indicating which repository failed and skips it, moving on to the next one.
 
-### **Key Fixes & Improvements**
-1. **Ensures the Output Directory Exists Before Writing the CSV**  
-   - Uses `os.makedirs(os.path.dirname(filename), exist_ok=True)`.
-   - Prevents "No such file or directory" errors.
+2. **Skipping Non-Docker Repositories:** 
+   - The script now explicitly skips non-Docker repositories. You can remove this filter if you want to process other types as well.
 
-2. **Improved Error Handling**  
-   - If an error occurs while processing a repository, it is skipped, and the script continues.
-   - Skipped repositories are logged in GitHub Actions.
+### Additional Suggestions:
+- If you continue to see the 404 error with certain repositories (e.g., `virtual-itsecurity-prisma-defender`), it's worth checking if the repository or path actually exists in the JFrog Artifactory, or if there's a misconfiguration in the URL or repository permissions.
 
-3. **Logging Skipped Repositories in GitHub Actions Output**  
-   - After processing, skipped repositories are listed to improve visibility.
-
----
-
-### **Next Steps**
-1. **Replace the old script with this updated one** in your repository.
-2. **Ensure GitHub Secrets are set correctly** (`JFROG_API_KEY_EV`, `JFROG_API_KEY_PPA`).
-3. **Trigger the workflow manually or wait for the scheduled run**.
-
-Now, the script should **process all valid repositories**, **skip failing ones**, and **log skipped repositories in GitHub Actions**. 🚀
+Let me know if this resolves the issue or if you'd like further adjustments!
