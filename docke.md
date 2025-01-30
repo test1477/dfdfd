@@ -1,5 +1,8 @@
-Here's the updated script with all symbols removed:  
+Here's the **updated full script** with the fix to ensure the output directory exists before saving the CSV file. It also includes better error handling to skip repositories if an error occurs and logs skipped repositories in the GitHub Actions output.  
 
+---
+
+### **Updated `jfrog_report.py`**
 ```python
 import os
 import requests
@@ -62,61 +65,59 @@ def list_artifacts(repo_name):
         print(f"Failed to list artifacts for {repo_name}: {response.status_code}")
         return []
 
-# Function to process repository artifacts without extra API calls
+# Function to process repository artifacts
 def process_repository(repo_name, package_type):
     """
     Processes all artifacts in a repository using batch metadata from the recursive listing.
     """
-    try:
-        artifact_list = list_artifacts(repo_name)
-        repo_details = []
+    artifact_list = list_artifacts(repo_name)
+    repo_details = []
 
-        for artifact in artifact_list:
-            artifact_path = artifact.get("uri", "")
-            artifact_url = urljoin(f"{JFROG_URL}/{repo_name}", artifact_path)
-            created_date = artifact.get("lastModified", "")
+    for artifact in artifact_list:
+        artifact_path = artifact.get("uri", "")
+        artifact_url = urljoin(f"{JFROG_URL}/{repo_name}", artifact_path)
+        created_date = artifact.get("lastModified", "")
 
-            # Parse package name and version from artifact path
-            segments = artifact_path.strip("/").split("/")
-            if len(segments) >= 2:
-                package_name = f"{repo_name}/{'/'.join(segments[:-2])}"  # Up to the version folder
-                version = segments[-2]  # Second-to-last segment
-            else:
-                package_name = repo_name
-                version = ""
+        # Parse package name and version from artifact path
+        segments = artifact_path.strip("/").split("/")
+        if len(segments) >= 2:
+            package_name = f"{repo_name}/{'/'.join(segments[:-2])}"  # Up to the version folder
+            version = segments[-2]  # Second-to-last segment
+        else:
+            package_name = repo_name
+            version = ""
 
-            # Append details only for Docker repositories
-            if package_type == "Docker":
-                repo_details.append({
-                    "repo_name": repo_name,
-                    "package_type": package_type,
-                    "package_name": package_name,
-                    "version": version,
-                    "url": artifact_url,
-                    "created_date": created_date,
-                    "license": "",  # Leave blank if not available
-                    "secarch": "",  # Leave blank if not available
-                    "artifactory_instance": "frigate.jfrog.io"
-                })
-        
-        return repo_details
-
-    except Exception as e:
-        print(f"Skipping repository {repo_name} due to error: {e}")
-        return []  # Return an empty list to avoid breaking execution
+        # Append details only for Docker repositories
+        if package_type == "Docker":
+            repo_details.append({
+                "repo_name": repo_name,
+                "package_type": package_type,
+                "package_name": package_name,
+                "version": version,
+                "url": artifact_url,
+                "created_date": created_date,
+                "license": "",  # Leave blank if not available
+                "secarch": "",  # Leave blank if not available
+                "artifactory_instance": "frigate.jfrog.io"
+            })
+    
+    return repo_details
 
 # Function to save data to CSV
 def save_to_csv(data, filename):
     """
-    Saves extracted metadata to a CSV file.
+    Saves extracted metadata to a CSV file, ensuring the directory exists.
     """
     headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'license', 'secarch', 'artifactory_instance']
-    
+
+    # Ensure the output directory exists
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+
     with open(filename, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=headers)
         writer.writeheader()
         writer.writerows(data)
-    
+
     print(f"Data has been written to {filename}")
 
 # Main function to process all repositories
@@ -126,7 +127,7 @@ def main():
     """
     repositories = fetch_repositories()
     all_repo_details = []
-    skipped_repositories = []  # To store skipped repositories
+    skipped_repos = []  # List to store skipped repositories
 
     for repo in repositories:
         repo_name = repo.get("key")
@@ -134,26 +135,48 @@ def main():
         print(f"Processing repository: {repo_name} (Type: {package_type})")
 
         try:
+            # Process only Docker repositories
             if package_type == "Docker":
                 repo_details = process_repository(repo_name, package_type)
                 all_repo_details.extend(repo_details)
         except Exception as e:
-            print(f"Error processing {repo_name}: {e}")
-            skipped_repositories.append(repo_name)
+            print(f"Skipping repository {repo_name} due to error: {e}")
+            skipped_repos.append(repo_name)  # Store skipped repo names
 
     # Save all details to CSV with a dynamic file name
     current_date = datetime.now().strftime('%Y-%m-%d')  # Current date in YYYY-MM-DD format
     output_file = os.path.join(args.output, f"EV_EOL_{current_date}_docker.csv")  # Save only Docker reports
     save_to_csv(all_repo_details, output_file)
 
-    # Show skipped repositories in GitHub Actions output
-    if skipped_repositories:
-        print("\nSkipped Repositories:")
-        for repo in skipped_repositories:
-            print(repo)
+    # Log skipped repositories in GitHub Actions output
+    if skipped_repos:
+        print("\nSkipped repositories due to errors:")
+        for repo in skipped_repos:
+            print(f"- {repo}")
 
 if __name__ == '__main__':
     main()
 ```
 
-This version is **fully cleaned up** with no symbols. Let me know if you need any further modifications!
+---
+
+### **Key Fixes & Improvements**
+1. **Ensures the Output Directory Exists Before Writing the CSV**  
+   - Uses `os.makedirs(os.path.dirname(filename), exist_ok=True)`.
+   - Prevents "No such file or directory" errors.
+
+2. **Improved Error Handling**  
+   - If an error occurs while processing a repository, it is skipped, and the script continues.
+   - Skipped repositories are logged in GitHub Actions.
+
+3. **Logging Skipped Repositories in GitHub Actions Output**  
+   - After processing, skipped repositories are listed to improve visibility.
+
+---
+
+### **Next Steps**
+1. **Replace the old script with this updated one** in your repository.
+2. **Ensure GitHub Secrets are set correctly** (`JFROG_API_KEY_EV`, `JFROG_API_KEY_PPA`).
+3. **Trigger the workflow manually or wait for the scheduled run**.
+
+Now, the script should **process all valid repositories**, **skip failing ones**, and **log skipped repositories in GitHub Actions**. 🚀
