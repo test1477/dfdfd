@@ -1,13 +1,34 @@
-The error you're seeing (`Malformed entry 1 in list file /etc/apt/sources.list.d/octopus.com.list (Component)`) indicates that the `octopus.com.list` file has an incorrect format, specifically with the "Component" field.
+The error you're encountering (`Malformed entry 1 in list file /etc/apt/sources.list.d/octopus.com.list (Component)`) indicates that the `/etc/apt/sources.list.d/octopus.com.list` file has an incorrect format. Additionally, the PGP public key block is being displayed on the terminal, which is not ideal.
 
-### To fix this, you can ensure that:
+Let's address both issues step by step:
 
-1. The repository URL is written correctly without extra or malformed components.
-2. The GPG key handling should be done without outputting the public key to the terminal.
+---
 
-Let's go over a step-by-step fix:
+### **1. Fixing the Malformed Entry in `octopus.com.list`**
+The malformed entry error occurs because the repository line in `/etc/apt/sources.list.d/octopus.com.list` is not formatted correctly. The correct format for a repository entry is:
 
-### Updated Workflow:
+```
+deb <repository-url> <distribution> <component>
+```
+
+For Octopus Deploy, the correct entry should be:
+
+```
+deb https://apt.octopus.com/stable/ main
+```
+
+Make sure there are no extra spaces, invalid characters, or missing fields.
+
+---
+
+### **2. Preventing the PGP Public Key from Displaying on the Terminal**
+The PGP public key is being displayed because the `curl` command is outputting the key directly to the terminal. Instead, we can redirect the output to a file using `tee` or `gpg --dearmor`.
+
+---
+
+### **Updated Workflow**
+
+Here’s the corrected GitHub Actions workflow:
 
 ```yaml
 name: Octo CLI Install Test
@@ -31,11 +52,11 @@ jobs:
         sudo apt update
         sudo apt install --no-install-recommends gnupg curl ca-certificates apt-transport-https -y
 
-        # Install the Octopus Deploy GPG key (to avoid displaying the key on the terminal)
-        curl -sSfL https://apt.octopus.com/public.key | sudo tee /etc/apt/trusted.gpg.d/octopus.asc
+        # Download and add the Octopus Deploy GPG key (without displaying it on the terminal)
+        curl -sSfL https://apt.octopus.com/public.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/octopus.gpg
 
         # Add the Octopus repository entry to the apt sources list (correct format)
-        echo "deb https://apt.octopus.com/stable main" | sudo tee /etc/apt/sources.list.d/octopus.com.list
+        echo "deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main" | sudo tee /etc/apt/sources.list.d/octopus.com.list
 
         # Update the package list again to include the Octopus repository
         sudo apt update
@@ -49,27 +70,43 @@ jobs:
         octo --version
 ```
 
-### Key Changes:
-1. **Fixing the repository line**: The repository entry in `/etc/apt/sources.list.d/octopus.com.list` is now correctly written without any extra components.
-   
-   ```bash
-   echo "deb https://apt.octopus.com/stable main" | sudo tee /etc/apt/sources.list.d/octopus.com.list
-   ```
+---
 
-2. **GPG key installation**: The GPG key is added to `/etc/apt/trusted.gpg.d/octopus.asc`, avoiding any terminal output of the key itself.
-   
-   ```bash
-   curl -sSfL https://apt.octopus.com/public.key | sudo tee /etc/apt/trusted.gpg.d/octopus.asc
-   ```
+### **Key Changes and Fixes**
 
-3. **Verifying Octopus CLI**: After installation, the version of the Octopus CLI is checked with `octo --version` to confirm it installed correctly.
+1. **Correct Repository Format**:
+   - The repository entry is now correctly formatted as:
+     ```bash
+     deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
+     ```
+   - This ensures that the `signed-by` option is used to associate the GPG key with the repository, and the `main` component is specified correctly.
 
-### Explanation of the Error:
-The malformed entry error occurs because an incorrect component (e.g., an extra space, invalid field) was present in the repository file `/etc/apt/sources.list.d/octopus.com.list`. The corrected repository URL in the command above ensures that only the `deb` and `main` components are present.
+2. **Prevent PGP Key Display**:
+   - The GPG key is now processed using `gpg --dearmor` and saved to `/etc/apt/trusted.gpg.d/octopus.gpg`. This avoids displaying the key on the terminal.
 
-### Outcome:
-- The public key will not be printed in the terminal.
-- The repository URL is correctly formatted in the list file, so the package manager can read it without issues.
-- The workflow will install Octopus CLI successfully.
+3. **Repository Update**:
+   - After adding the repository, `sudo apt update` is run to refresh the package list and include the Octopus repository.
 
-Try this updated workflow and let me know if it resolves the issue!
+4. **Install Octopus CLI**:
+   - The `octopuscli` package is installed using `sudo apt install -y octopuscli`.
+
+5. **Verification**:
+   - The `octo --version` command is used to verify that the Octopus CLI is installed and working.
+
+---
+
+### **Why These Changes Work**
+- The `signed-by` option ensures that the GPG key is explicitly associated with the repository, which is a best practice for modern APT usage.
+- The `gpg --dearmor` command converts the ASCII-armored PGP key into a binary format, which is required for `/etc/apt/trusted.gpg.d/`.
+- The repository entry is now correctly formatted, so APT can read it without errors.
+
+---
+
+### **Expected Outcome**
+- The workflow will no longer display the PGP public key on the terminal.
+- The malformed entry error will be resolved.
+- The Octopus CLI will be installed successfully, and `octo --version` will confirm the installation.
+
+---
+
+Let me know if you encounter any further issues!
