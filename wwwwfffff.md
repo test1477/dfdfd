@@ -1,24 +1,19 @@
-The error persists because there is still a malformed entry in the `/etc/apt/sources.list.d/octopus.com.list` file. Specifically, the issue lies in the format of the repository line. Let's address this step by step.
-
----
-
-### **Root Cause**
-The error `Malformed entry 1 in list file /etc/apt/sources.list.d/octopus.com.list (Component)` indicates that the repository line in the `octopus.com.list` file is not formatted correctly. The line:
+The issue persists because there is still a formatting error in the repository line in `/etc/apt/sources.list.d/octopus.com.list`. Specifically, the problem lies in the **missing space** between the URL (`https://apt.octopus.com/stable/`) and the component (`main`). The line:
 
 ```
-deb [signed-by-/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
+deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/main
 ```
 
-has a typo: `signed-by-` should be `signed-by=` (an equals sign `=` is missing).
-
----
-
-### **Fix**
-Update the repository line to use the correct syntax:
+is incorrect because there is no space between `stable/` and `main`. The correct format requires a space:
 
 ```
 deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
 ```
+
+---
+
+### **Fix**
+Update the repository line to include the required space between the URL and the component.
 
 ---
 
@@ -68,37 +63,45 @@ jobs:
 
 ---
 
-### **Key Fixes**
-1. **Corrected Repository Line**:
-   - The repository line now uses the correct syntax:
-     ```
-     deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
-     ```
-   - The `signed-by=` option is used to associate the GPG key with the repository.
+### **Key Fix**
+The repository line is now correctly formatted with a space between the URL and the component:
 
-2. **GPG Key Handling**:
-   - The GPG key is downloaded and processed using `gpg --dearmor`, then saved to `/etc/apt/trusted.gpg.d/octopus.gpg`.
-
-3. **Repository Update**:
-   - After adding the repository, `sudo apt update` is run to refresh the package list and include the Octopus repository.
-
-4. **Install Octopus CLI**:
-   - The `octopuscli` package is installed using `sudo apt install -y octopuscli`.
-
-5. **Verification**:
-   - The `octo --version` command is used to verify that the Octopus CLI is installed and working.
+```
+deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
+```
 
 ---
 
-### **Explanation of Warnings**
-- **`114 packages can be upgraded`**:
-  - This is a warning indicating that there are 114 packages on the system that can be upgraded. It does not affect the installation of the Octopus CLI. You can ignore this for now, or add a step to upgrade all packages if desired:
-    ```bash
-    sudo apt upgrade -y
-    ```
+### **Debugging Steps**
+If the error persists, follow these steps to debug:
 
-- **`WARNING: apt does not have a stable CLI interface`**:
-  - This is a general warning from APT, indicating that its CLI interface may change in future versions. It does not affect the functionality of the workflow.
+1. **Check the Repository File**:
+   - Verify the contents of `/etc/apt/sources.list.d/octopus.com.list`:
+     ```bash
+     cat /etc/apt/sources.list.d/octopus.com.list
+     ```
+   - Ensure it contains:
+     ```
+     deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
+     ```
+
+2. **Check the GPG Key File**:
+   - Verify that the GPG key file exists:
+     ```bash
+     ls -l /etc/apt/trusted.gpg.d/octopus.gpg
+     ```
+
+3. **Manually Run `sudo apt update`**:
+   - Run the following command to check for errors:
+     ```bash
+     sudo apt update
+     ```
+
+4. **Check for Extra Spaces or Characters**:
+   - Ensure there are no extra spaces, invisible characters, or line breaks in the repository file. You can use `cat -A` to display hidden characters:
+     ```bash
+     cat -A /etc/apt/sources.list.d/octopus.com.list
+     ```
 
 ---
 
@@ -109,24 +112,23 @@ jobs:
 
 ---
 
-### **Debugging Tips**
-If the error persists:
-1. Check the contents of `/etc/apt/sources.list.d/octopus.com.list` to ensure the repository line is correct:
-   ```bash
-   cat /etc/apt/sources.list.d/octopus.com.list
-   ```
-   It should contain:
-   ```
-   deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
-   ```
+### **Additional Notes**
+- The warning about `114 packages can be upgraded` is unrelated to the Octopus CLI installation. It simply indicates that there are system packages that can be upgraded. You can ignore this for now, or add a step to upgrade all packages:
+  ```bash
+  sudo apt upgrade -y
+  ```
 
-2. Verify the GPG key file exists:
-   ```bash
-   ls -l /etc/apt/trusted.gpg.d/octopus.gpg
-   ```
-
-3. Manually run `sudo apt update` to check for errors.
+- The warning `WARNING: apt does not have a stable CLI interface` is a general notice from APT and does not affect the functionality of the workflow.
 
 ---
 
-Let me know if you encounter any further issues!
+### **Final Check**
+If the issue still persists, please share the exact contents of `/etc/apt/sources.list.d/octopus.com.list` and the output of the following commands:
+
+```bash
+cat /etc/apt/sources.list.d/octopus.com.list
+ls -l /etc/apt/trusted.gpg.d/octopus.gpg
+sudo apt update
+```
+
+This will help me diagnose the problem further. Let me know!
