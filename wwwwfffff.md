@@ -1,28 +1,24 @@
-The error you're encountering (`Malformed entry 1 in list file /etc/apt/sources.list.d/octopus.com.list (Component)`) indicates that the `/etc/apt/sources.list.d/octopus.com.list` file has an incorrect format. Additionally, the PGP public key block is being displayed on the terminal, which is not ideal.
-
-Let's address both issues step by step:
+The error persists because there is still a malformed entry in the `/etc/apt/sources.list.d/octopus.com.list` file. Specifically, the issue lies in the format of the repository line. Let's address this step by step.
 
 ---
 
-### **1. Fixing the Malformed Entry in `octopus.com.list`**
-The malformed entry error occurs because the repository line in `/etc/apt/sources.list.d/octopus.com.list` is not formatted correctly. The correct format for a repository entry is:
+### **Root Cause**
+The error `Malformed entry 1 in list file /etc/apt/sources.list.d/octopus.com.list (Component)` indicates that the repository line in the `octopus.com.list` file is not formatted correctly. The line:
 
 ```
-deb <repository-url> <distribution> <component>
+deb [signed-by-/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
 ```
 
-For Octopus Deploy, the correct entry should be:
-
-```
-deb https://apt.octopus.com/stable/ main
-```
-
-Make sure there are no extra spaces, invalid characters, or missing fields.
+has a typo: `signed-by-` should be `signed-by=` (an equals sign `=` is missing).
 
 ---
 
-### **2. Preventing the PGP Public Key from Displaying on the Terminal**
-The PGP public key is being displayed because the `curl` command is outputting the key directly to the terminal. Instead, we can redirect the output to a file using `tee` or `gpg --dearmor`.
+### **Fix**
+Update the repository line to use the correct syntax:
+
+```
+deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
+```
 
 ---
 
@@ -72,17 +68,16 @@ jobs:
 
 ---
 
-### **Key Changes and Fixes**
-
-1. **Correct Repository Format**:
-   - The repository entry is now correctly formatted as:
-     ```bash
+### **Key Fixes**
+1. **Corrected Repository Line**:
+   - The repository line now uses the correct syntax:
+     ```
      deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
      ```
-   - This ensures that the `signed-by` option is used to associate the GPG key with the repository, and the `main` component is specified correctly.
+   - The `signed-by=` option is used to associate the GPG key with the repository.
 
-2. **Prevent PGP Key Display**:
-   - The GPG key is now processed using `gpg --dearmor` and saved to `/etc/apt/trusted.gpg.d/octopus.gpg`. This avoids displaying the key on the terminal.
+2. **GPG Key Handling**:
+   - The GPG key is downloaded and processed using `gpg --dearmor`, then saved to `/etc/apt/trusted.gpg.d/octopus.gpg`.
 
 3. **Repository Update**:
    - After adding the repository, `sudo apt update` is run to refresh the package list and include the Octopus repository.
@@ -95,17 +90,42 @@ jobs:
 
 ---
 
-### **Why These Changes Work**
-- The `signed-by` option ensures that the GPG key is explicitly associated with the repository, which is a best practice for modern APT usage.
-- The `gpg --dearmor` command converts the ASCII-armored PGP key into a binary format, which is required for `/etc/apt/trusted.gpg.d/`.
-- The repository entry is now correctly formatted, so APT can read it without errors.
+### **Explanation of Warnings**
+- **`114 packages can be upgraded`**:
+  - This is a warning indicating that there are 114 packages on the system that can be upgraded. It does not affect the installation of the Octopus CLI. You can ignore this for now, or add a step to upgrade all packages if desired:
+    ```bash
+    sudo apt upgrade -y
+    ```
+
+- **`WARNING: apt does not have a stable CLI interface`**:
+  - This is a general warning from APT, indicating that its CLI interface may change in future versions. It does not affect the functionality of the workflow.
 
 ---
 
 ### **Expected Outcome**
-- The workflow will no longer display the PGP public key on the terminal.
 - The malformed entry error will be resolved.
-- The Octopus CLI will be installed successfully, and `octo --version` will confirm the installation.
+- The Octopus CLI will be installed successfully.
+- The `octo --version` command will confirm the installation.
+
+---
+
+### **Debugging Tips**
+If the error persists:
+1. Check the contents of `/etc/apt/sources.list.d/octopus.com.list` to ensure the repository line is correct:
+   ```bash
+   cat /etc/apt/sources.list.d/octopus.com.list
+   ```
+   It should contain:
+   ```
+   deb [signed-by=/etc/apt/trusted.gpg.d/octopus.gpg] https://apt.octopus.com/stable/ main
+   ```
+
+2. Verify the GPG key file exists:
+   ```bash
+   ls -l /etc/apt/trusted.gpg.d/octopus.gpg
+   ```
+
+3. Manually run `sudo apt update` to check for errors.
 
 ---
 
