@@ -1,22 +1,26 @@
-Here’s a Jira story draft for your request:  
+Here's your updated Jira story:  
 
 ---
 
-**Story Title:** Fine-Tune Azure PPA Modules and Add Correct Release Tags  
+**Story Title:** Export All Azure Terraform Modules to Enterprise GitHub and Assign Role Assignments for Developer Testing  
 
 **Story Description:**  
-We need to review and fine-tune all Azure PPA modules to ensure they are correctly configured. Additionally, we need to update and apply the correct release tags to maintain version control and improve tracking.  
+To enhance collaboration and maintain version control, we need to export all Azure Terraform modules to the Enterprise GitHub repository. Additionally, we must assign appropriate role assignments to developers so they can test various Azure services, including App Service, Function Apps, Logic Apps, and Service Bus.  
 
 **Acceptance Criteria:**  
-- [ ] Review and validate the configuration of all Azure PPA modules.  
-- [ ] Ensure all modules adhere to best practices and compliance guidelines.  
-- [ ] Identify and apply the correct release tags to each module.  
-- [ ] Update Terraform configurations if necessary.  
-- [ ] Validate changes through testing and ensure proper deployment.  
+- [ ] Export all Azure Terraform modules to the Enterprise GitHub repository.  
+- [ ] Ensure proper structure and documentation in the repository.  
+- [ ] Assign necessary role-based access control (RBAC) to developers.  
+- [ ] Validate access for developers to test:  
+  - App Service  
+  - Function Apps  
+  - Logic Apps  
+  - Service Bus  
+- [ ] Perform testing to confirm access permissions and functionality.  
 
-**Priority:** Medium/High  
-**Labels:** Azure, Terraform, Release Management  
+**Priority:** High  
+**Labels:** Azure, Terraform, RBAC, GitHub, Testing  
 **Assignee:** [Your Name]  
 **Sprint:** [Relevant Sprint Name]  
 
-Would you like to include any additional details, such as a list of affected modules or dependencies?
+Would you like to specify the repository name, role levels (e.g., Contributor, Owner), or any additional requirements?
