@@ -1,6 +1,8 @@
-To delete CSV files that are older than 7 days in the `reports/ev` directory, you can add a step that runs a command to find and remove those files. The `find` command in Linux can be used to delete files older than 7 days.
+To delete CSV files that are older than 7 days in the JFrog Artifactory `/reports/ev` repository, you can use the JFrog CLI or `curl` to first list the files, check their dates, and then delete the older ones. JFrog Artifactory does not directly support the `find` command like a local filesystem, so you'd have to interact with the Artifactory REST API to get the list of files and their metadata.
 
-Here's how you can update your workflow to include this step:
+Here’s how you can update the workflow to delete files older than 7 days from the `/reports/ev` repository on JFrog:
+
+### Updated workflow with file deletion in JFrog Artifactory:
 
 ```yaml
 name: Generate JFrog Reports
@@ -46,10 +48,25 @@ jobs:
           ls -lh reports/ev || echo "EV report missing"
           ls -lh reports/ppa || echo "PPA report missing"
 
-      - name: Delete Old EV Reports (older than 7 days)
+      - name: Delete Old EV Reports from JFrog (older than 7 days)
+        env:
+          JFROG_API_KEY_EV: ${{ secrets.JFROG_API_KEY_EV }}
         run: |
-          echo "Deleting CSV files older than 7 days in reports/ev..."
-          find reports/ev/*.csv -type f -mtime +7 -exec rm {} \; || echo "No files older than 7 days to delete"
+          echo "Deleting CSV files older than 7 days in JFrog /reports/ev..."
+          # List the files in the reports/ev repository and check their creation date
+          files=$(curl -s -H "X-JFrog-Art-Api:${JFROG_API_KEY_EV}" "https://frigate.io/artifactory/api/storage/reports/ev?list&listFolders=0" | jq -r '.files[] | select(.uri | test(".csv$")) | .uri')
+          for file in $files; do
+            # Get the file details and check the last modified date
+            last_modified=$(curl -s -H "X-JFrog-Art-Api:${JFROG_API_KEY_EV}" "https://frigate.io/artifactory/api/storage/reports/ev$file" | jq -r '.lastModified')
+            last_modified_timestamp=$(date -d "$last_modified" +%s)
+            current_timestamp=$(date +%s)
+            diff=$(( (current_timestamp - last_modified_timestamp) / 86400 ))  # Difference in days
+            if [ $diff -gt 7 ]; then
+              # Delete the file if it is older than 7 days
+              echo "Deleting $file (older than 7 days)"
+              curl -X DELETE -H "X-JFrog-Art-Api:${JFROG_API_KEY_EV}" "https://frigate.io/artifactory/reports/ev$file" || echo "Failed to delete $file"
+            fi
+          done
 
       - name: Upload Reports to JFrog (EV)
         env:
@@ -74,13 +91,14 @@ jobs:
           fi
 ```
 
-### Key change:
-- **Delete Old EV Reports**: Added a step to find and delete CSV files older than 7 days in the `reports/ev` directory using the `find` command:
+### Key changes:
+1. **Deleting old files from JFrog**:
+   - The workflow fetches the list of CSV files in the `/reports/ev` repository using the JFrog Artifactory Storage API.
+   - It checks the `lastModified` date for each file, calculates the difference from the current date, and deletes files that are older than 7 days.
+   - Uses `jq` to parse JSON responses and `curl` to delete the files.
 
-  ```bash
-  find reports/ev/*.csv -type f -mtime +7 -exec rm {} \;
-  ```
+### Notes:
+- Make sure you have the `jq` tool installed on the runner since it's used to parse the JSON response from Artifactory.
+- The script uses the `X-JFrog-Art-Api` header to authenticate requests, and the `DELETE` method is used to remove old files.
 
-This command will search for `.csv` files in the `reports/ev` directory, and if they are older than 7 days (`-mtime +7`), it will delete them (`-exec rm {} \;`).
-
-If no files are older than 7 days, it will print `"No files older than 7 days to delete"`.
+This workflow will now delete CSV files in `/reports/ev` older than 7 days from the JFrog repository before uploading the new reports.
