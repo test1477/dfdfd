@@ -1,13 +1,6 @@
-It seems like the script is handling Docker repositories and processing artifacts, but it may also be unintentionally including cache folders or artifacts that you don’t want. To fix this, we can modify the script to filter out cache folders or any other irrelevant folders. 
+To avoid including `.jfrog` folders (which are typically cache folders), we can modify the filtering logic in the `list_artifacts` function to exclude any artifacts whose URI contains the `.jfrog` directory. Here's how you can do that:
 
-Here's an update that can help to exclude cache folders:
-
-### Fix:
-1. **Add a filter to exclude cache folders**: If you know the specific name or pattern of the cache folders, we can filter them out in the `list_artifacts` function. For example, if cache folders have a known name pattern like `cache`, we can exclude them.
-   
-2. **Handle artifact paths more specifically**: When listing artifacts, make sure we only process the ones relevant to your needs.
-
-### Updated Code with Cache Folder Filtering:
+### Updated Code with `.jfrog` Folder Exclusion:
 
 ```python
 import os
@@ -60,7 +53,7 @@ def fetch_repositories():
 # Function to list all artifacts in a repository
 def list_artifacts(repo_name):
     """
-    Recursively fetches all artifacts in the specified repository, excluding cache folders.
+    Recursively fetches all artifacts in the specified repository, excluding .jfrog cache folders.
     """
     url = f"{JFROG_URL}/api/storage/{repo_name}?list&deep=1"
     try:
@@ -68,8 +61,8 @@ def list_artifacts(repo_name):
         response.raise_for_status()
         artifacts = response.json().get("files", [])
 
-        # Exclude cache folders or files with 'cache' in their name
-        filtered_artifacts = [artifact for artifact in artifacts if 'cache' not in artifact.get('uri', '')]
+        # Exclude .jfrog folders or files
+        filtered_artifacts = [artifact for artifact in artifacts if '.jfrog' not in artifact.get('uri', '')]
         return filtered_artifacts
     except requests.RequestException as e:
         print(f"Failed to list artifacts for {repo_name}: {e}")
@@ -169,8 +162,14 @@ if __name__ == '__main__':
     main()
 ```
 
-### Key Changes:
-- **Cache Folder Exclusion**: In the `list_artifacts` function, I added a filter to exclude any artifacts whose URI contains the word "cache".
-- **Error Handling**: Added error handling in multiple areas to ensure the script can continue processing other repositories even if one fails.
+### Key Update:
+- **Excluding `.jfrog` Folders**: In the `list_artifacts` function, the filter now excludes any artifact whose URI contains the `.jfrog` directory by checking for `.jfrog` in the artifact's URI.
 
-This should now filter out cache folders or any artifacts you don't want. You can adjust the exclusion condition based on the naming convention or structure of the folders you want to exclude.
+### Explanation:
+- The filter line: 
+  ```python
+  filtered_artifacts = [artifact for artifact in artifacts if '.jfrog' not in artifact.get('uri', '')]
+  ```
+  ensures that any artifacts under `.jfrog` folders are excluded from the list of artifacts to be processed.
+
+Now, this script will avoid including any artifacts in `.jfrog` folders, which should resolve the issue with cache folders. Let me know if this works or if you need further adjustments!
