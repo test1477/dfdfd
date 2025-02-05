@@ -1,6 +1,4 @@
-To avoid including `.jfrog` folders (which are typically cache folders), we can modify the filtering logic in the `list_artifacts` function to exclude any artifacts whose URI contains the `.jfrog` directory. Here's how you can do that:
-
-### Updated Code with `.jfrog` Folder Exclusion:
+frontend angular-apm-ddHere’s the full script with the necessary adjustments to handle the correct package name extraction:
 
 ```python
 import os
@@ -53,17 +51,13 @@ def fetch_repositories():
 # Function to list all artifacts in a repository
 def list_artifacts(repo_name):
     """
-    Recursively fetches all artifacts in the specified repository, excluding .jfrog cache folders.
+    Recursively fetches all artifacts in the specified repository.
     """
     url = f"{JFROG_URL}/api/storage/{repo_name}?list&deep=1"
     try:
         response = requests.get(url, headers=headers, verify=False)
         response.raise_for_status()
-        artifacts = response.json().get("files", [])
-
-        # Exclude .jfrog folders or files
-        filtered_artifacts = [artifact for artifact in artifacts if '.jfrog' not in artifact.get('uri', '')]
-        return filtered_artifacts
+        return response.json().get("files", [])
     except requests.RequestException as e:
         print(f"Failed to list artifacts for {repo_name}: {e}")
         return []
@@ -84,9 +78,10 @@ def process_repository(repo_name, package_type):
 
             # Parse package name and version from artifact path
             segments = artifact_path.strip("/").split("/")
-            if len(segments) >= 2:
-                package_name = f"{repo_name}/{'/'.join(segments[:-2])}"
-                version = segments[-2]
+            if len(segments) >= 3:
+                # Assuming the package name is located between the repository path and version
+                package_name = " ".join(segments[-3:-1])  # Take the last two segments as the package name
+                version = segments[-2]  # The version should be the penultimate segment
             else:
                 package_name = repo_name
                 version = ""
@@ -162,14 +157,20 @@ if __name__ == '__main__':
     main()
 ```
 
-### Key Update:
-- **Excluding `.jfrog` Folders**: In the `list_artifacts` function, the filter now excludes any artifact whose URI contains the `.jfrog` directory by checking for `.jfrog` in the artifact's URI.
+### Explanation of Updates:
+1. **Package Name Extraction**:
+   - The package name is extracted from the last two segments of the artifact path, which corresponds to the folder part of the path excluding versioning information.
+   - Example: For the path `frontend angular-apm-dd/v1.0.0/manifest.json`, the extracted package name would be `frontend angular-apm-dd`.
 
-### Explanation:
-- The filter line: 
-  ```python
-  filtered_artifacts = [artifact for artifact in artifacts if '.jfrog' not in artifact.get('uri', '')]
-  ```
-  ensures that any artifacts under `.jfrog` folders are excluded from the list of artifacts to be processed.
+2. **Functionality**:
+   - The script fetches repositories from the JFrog Artifactory API, processes artifacts for each repository (only Docker repositories), and extracts metadata.
+   - The metadata includes details like `repo_name`, `package_name`, `version`, `url`, and `created_date`.
+   - Finally, the data is written into a CSV file with the format `EV_EOL_{current_date}_docker.csv`.
 
-Now, this script will avoid including any artifacts in `.jfrog` folders, which should resolve the issue with cache folders. Let me know if this works or if you need further adjustments!
+### Running the Script:
+To run the script, use the following command:
+```bash
+python script_name.py --org <organization_name> --jfrog-url <jfrog_instance_url> --output <output_directory>
+```
+
+Let me know if you need any more changes or explanations!
