@@ -1,104 +1,176 @@
-To delete CSV files that are older than 7 days in the JFrog Artifactory `/reports/ev` repository, you can use the JFrog CLI or `curl` to first list the files, check their dates, and then delete the older ones. JFrog Artifactory does not directly support the `find` command like a local filesystem, so you'd have to interact with the Artifactory REST API to get the list of files and their metadata.
+It seems like the script is handling Docker repositories and processing artifacts, but it may also be unintentionally including cache folders or artifacts that you don’t want. To fix this, we can modify the script to filter out cache folders or any other irrelevant folders. 
 
-Here’s how you can update the workflow to delete files older than 7 days from the `/reports/ev` repository on JFrog:
+Here's an update that can help to exclude cache folders:
 
-### Updated workflow with file deletion in JFrog Artifactory:
+### Fix:
+1. **Add a filter to exclude cache folders**: If you know the specific name or pattern of the cache folders, we can filter them out in the `list_artifacts` function. For example, if cache folders have a known name pattern like `cache`, we can exclude them.
+   
+2. **Handle artifact paths more specifically**: When listing artifacts, make sure we only process the ones relevant to your needs.
 
-```yaml
-name: Generate JFrog Reports
+### Updated Code with Cache Folder Filtering:
 
-on:
-  schedule:
-    - cron: "0 9 * * *"  # Runs daily at 9 AM UTC
-  workflow_dispatch:  # Allows manual triggering
+```python
+import os
+import requests
+import csv
+import warnings
+from urllib.parse import urljoin
+from datetime import datetime
+import argparse
 
-jobs:
-  generate-report:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+# Suppress SSL verification warnings
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+warnings.simplefilter('ignore', InsecureRequestWarning)
 
-      - name: Set Up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.9"
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description="Generate JFrog reports for multiple organizations.")
+parser.add_argument('--org', required=True, help="The organization name (e.g., 'ev' or 'ppa').")
+parser.add_argument('--jfrog-url', required=True, help="The JFrog Artifactory URL.")
+parser.add_argument('--output', required=True, help="The output directory for the generated report.")
+args = parser.parse_args()
 
-      - name: Install Dependencies
-        run: pip install requests
+# Get JFrog Artifactory instance details
+JFROG_URL = args.jfrog_url
+ARTIFACTORY_TOKEN = os.getenv(f'JFROG_API_KEY_{args.org.upper()}')  # Get API key for the given organization
 
-      - name: Run Report Script for EV
-        env:
-          JFROG_API_KEY_EV: ${{ secrets.JFROG_API_KEY_EV }}
-        run: |
-          echo "Generating report for EV..."
-          python report_script.py --org ev --jfrog-url "https://frigate.io/artifactory" --output reports/ev || echo "EV report generation failed"
-          ls -lh reports/ev || echo "EV directory is empty"
+if not ARTIFACTORY_TOKEN:
+    print(f"Error: JFROG_API_KEY_{args.org.upper()} is not set in environment variables.")
+    exit(1)
 
-      - name: Run Report Script for PPA
-        env:
-          JFROG_API_KEY_PPA: ${{ secrets.JFROG_API_KEY_PPA }}
-        run: |
-          echo "Generating report for PPA..."
-          python report_script.py --org ppa --jfrog-url "https://ppa.jfrog.io/artifactory" --output reports/ppa || echo "PPA report generation failed"
-          ls -lh reports/ppa || echo "PPA directory is empty"
+# Headers for the API request
+headers = {
+    'Authorization': f'Bearer {ARTIFACTORY_TOKEN}',
+    'Accept': 'application/json',
+}
 
-      - name: Validate Reports Before Upload
-        run: |
-          ls -lh reports/ev || echo "EV report missing"
-          ls -lh reports/ppa || echo "PPA report missing"
+# Function to fetch all repositories
+def fetch_repositories():
+    """
+    Fetches a list of all repositories in the Artifactory instance.
+    """
+    url = f"{JFROG_URL}/api/repositories"
+    try:
+        response = requests.get(url, headers=headers, verify=False)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        print(f"Failed to fetch repositories: {e}")
+        return []
 
-      - name: Delete Old EV Reports from JFrog (older than 7 days)
-        env:
-          JFROG_API_KEY_EV: ${{ secrets.JFROG_API_KEY_EV }}
-        run: |
-          echo "Deleting CSV files older than 7 days in JFrog /reports/ev..."
-          # List the files in the reports/ev repository and check their creation date
-          files=$(curl -s -H "X-JFrog-Art-Api:${JFROG_API_KEY_EV}" "https://frigate.io/artifactory/api/storage/reports/ev?list&listFolders=0" | jq -r '.files[] | select(.uri | test(".csv$")) | .uri')
-          for file in $files; do
-            # Get the file details and check the last modified date
-            last_modified=$(curl -s -H "X-JFrog-Art-Api:${JFROG_API_KEY_EV}" "https://frigate.io/artifactory/api/storage/reports/ev$file" | jq -r '.lastModified')
-            last_modified_timestamp=$(date -d "$last_modified" +%s)
-            current_timestamp=$(date +%s)
-            diff=$(( (current_timestamp - last_modified_timestamp) / 86400 ))  # Difference in days
-            if [ $diff -gt 7 ]; then
-              # Delete the file if it is older than 7 days
-              echo "Deleting $file (older than 7 days)"
-              curl -X DELETE -H "X-JFrog-Art-Api:${JFROG_API_KEY_EV}" "https://frigate.io/artifactory/reports/ev$file" || echo "Failed to delete $file"
-            fi
-          done
+# Function to list all artifacts in a repository
+def list_artifacts(repo_name):
+    """
+    Recursively fetches all artifacts in the specified repository, excluding cache folders.
+    """
+    url = f"{JFROG_URL}/api/storage/{repo_name}?list&deep=1"
+    try:
+        response = requests.get(url, headers=headers, verify=False)
+        response.raise_for_status()
+        artifacts = response.json().get("files", [])
 
-      - name: Upload Reports to JFrog (EV)
-        env:
-          JFROG_API_KEY_EV: ${{ secrets.JFROG_API_KEY_EV }}
-        run: |
-          if [ -f "reports/ev/EV_EOL_$(date +%m-%d-%Y).csv" ]; then
-            echo "Uploading EV report..."
-            curl -H "X-JFrog-Art-Api:${JFROG_API_KEY_EV}" -T reports/ev/EV_EOL_$(date +%m-%d-%Y).csv "https://frigate.io/artifactory/reports/ev/EV_EOL_$(date +%m-%d-%Y).csv" || echo "EV upload failed"
-          else
-            echo "EV report file not found, skipping upload."
-          fi
+        # Exclude cache folders or files with 'cache' in their name
+        filtered_artifacts = [artifact for artifact in artifacts if 'cache' not in artifact.get('uri', '')]
+        return filtered_artifacts
+    except requests.RequestException as e:
+        print(f"Failed to list artifacts for {repo_name}: {e}")
+        return []
 
-      - name: Upload Reports to JFrog (PPA)
-        env:
-          JFROG_API_KEY_PPA: ${{ secrets.JFROG_API_KEY_PPA }}
-        run: |
-          if [ -f "reports/ppa/EV_EOL_$(date +%m-%d-%Y).csv" ]; then
-            echo "Uploading PPA report..."
-            curl -H "X-JFrog-Art-Api:${JFROG_API_KEY_PPA}" -T reports/ppa/EV_EOL_$(date +%m-%d-%Y).csv "https://ppa.jfrog.io/artifactory/reports/ppa/EV_EOL_$(date +%m-%d-%Y).csv" || echo "PPA upload failed"
-          else
-            echo "PPA report file not found, skipping upload."
-          fi
+# Function to process repository artifacts
+def process_repository(repo_name, package_type):
+    """
+    Processes all artifacts in a repository using batch metadata from the recursive listing.
+    """
+    try:
+        artifact_list = list_artifacts(repo_name)
+        repo_details = []
+
+        for artifact in artifact_list:
+            artifact_path = artifact.get("uri", "")
+            artifact_url = urljoin(f"{JFROG_URL}/{repo_name}", artifact_path)
+            created_date = artifact.get("lastModified", "")
+
+            # Parse package name and version from artifact path
+            segments = artifact_path.strip("/").split("/")
+            if len(segments) >= 2:
+                package_name = f"{repo_name}/{'/'.join(segments[:-2])}"
+                version = segments[-2]
+            else:
+                package_name = repo_name
+                version = ""
+
+            # Append details only for Docker repositories
+            if package_type == "Docker":
+                repo_details.append({
+                    "repo_name": repo_name,
+                    "package_type": package_type,
+                    "package_name": package_name,
+                    "version": version,
+                    "url": artifact_url,
+                    "created_date": created_date,
+                    "license": "",  # Leave blank if not available
+                    "secarch": "",  # Leave blank if not available
+                    "artifactory_instance": "frigate.jfrog.io"
+                })
+
+        return repo_details
+
+    except Exception as e:
+        print(f"Skipping repository {repo_name} due to error: {e}")
+        return []  # Continue with other repositories
+
+# Function to save data to CSV
+def save_to_csv(data, filename):
+    """
+    Saves extracted metadata to a CSV file.
+    """
+    headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'license', 'secarch', 'artifactory_instance']
+    
+    os.makedirs(os.path.dirname(filename), exist_ok=True)  # Ensure output directory exists
+
+    with open(filename, mode='w', newline='', encoding='utf-8') as file:
+        writer = csv.DictWriter(file, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(data)
+    
+    print(f"Data has been written to {filename}")
+
+# Main function to process all repositories
+def main():
+    """
+    Main function to process all repositories and extract metadata.
+    """
+    repositories = fetch_repositories()
+    all_repo_details = []
+
+    if not repositories:
+        print("No repositories found or failed to fetch repositories.")
+        return
+
+    for repo in repositories:
+        repo_name = repo.get("key")
+        package_type = repo.get("packageType", "")
+
+        print(f"Processing repository: {repo_name} (Type: {package_type})")
+
+        try:
+            # Process only Docker repositories
+            if package_type == "Docker":
+                repo_details = process_repository(repo_name, package_type)
+                all_repo_details.extend(repo_details)
+        except Exception as e:
+            print(f"Skipping repository {repo_name} due to unexpected error: {e}")
+
+    # Save all details to CSV with a dynamic file name
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    output_file = os.path.join(args.output, f"EV_EOL_{current_date}_docker.csv")
+    save_to_csv(all_repo_details, output_file)
+
+if __name__ == '__main__':
+    main()
 ```
 
-### Key changes:
-1. **Deleting old files from JFrog**:
-   - The workflow fetches the list of CSV files in the `/reports/ev` repository using the JFrog Artifactory Storage API.
-   - It checks the `lastModified` date for each file, calculates the difference from the current date, and deletes files that are older than 7 days.
-   - Uses `jq` to parse JSON responses and `curl` to delete the files.
+### Key Changes:
+- **Cache Folder Exclusion**: In the `list_artifacts` function, I added a filter to exclude any artifacts whose URI contains the word "cache".
+- **Error Handling**: Added error handling in multiple areas to ensure the script can continue processing other repositories even if one fails.
 
-### Notes:
-- Make sure you have the `jq` tool installed on the runner since it's used to parse the JSON response from Artifactory.
-- The script uses the `X-JFrog-Art-Api` header to authenticate requests, and the `DELETE` method is used to remove old files.
-
-This workflow will now delete CSV files in `/reports/ev` older than 7 days from the JFrog repository before uploading the new reports.
+This should now filter out cache folders or any artifacts you don't want. You can adjust the exclusion condition based on the naming convention or structure of the folders you want to exclude.
