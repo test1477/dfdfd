@@ -1,0 +1,82 @@
+Certainly! I understand you want to create a similar workflow for TRP and RDA checks, using a shared workflow approach like the SBOM generation. Here's a caller workflow for TRP and RDA checks that follows the same pattern:
+
+```yaml
+name: TRP and RDA Compliance Check Caller
+
+on:
+  pull_request:
+    branches: [main, develop, sandbox]  # Adjust branch names as needed
+  workflow_dispatch:
+
+jobs:
+  call-workflow:
+    runs-on: evsharesvcnonprod
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install GH CLI
+        run: sudo snap install gh --classic
+
+      - name: Trigger TRP and RDA Compliance Check workflow
+        env:
+          GH_TOKEN: ${{ secrets.GH_WORKFLOW_TOKEN }}
+        run: |
+          echo "${{ secrets.GH_WORKFLOW_TOKEN }}" | gh auth login --with-token
+          gh workflow run TRP-RDA-compliance-check.yml -R Eaton-Vance-Corp/SRE-Utilities -f eonid=$(git config --get custom.eonid)
+```
+
+This workflow:
+1. Triggers on pull requests to specified branches and manual dispatch.
+2. Runs on your custom runner 'evsharesvcnonprod'.
+3. Checks out the code and installs GitHub CLI.
+4. Triggers a shared workflow named 'TRP-RDA-compliance-check.yml' in the 'SRE-Utilities' repository.
+5. Passes the EONID as a parameter to the shared workflow.
+
+You'll need to create the shared workflow 'TRP-RDA-compliance-check.yml' in the 'SRE-Utilities' repository. Here's an example of what that shared workflow might look like:
+
+```yaml
+name: TRP and RDA Compliance Check
+
+on:
+  workflow_call:
+    inputs:
+      eonid:
+        required: true
+        type: string
+
+jobs:
+  compliance-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check TRP compliance
+        run: |
+          API_ENDPOINT="http://sdic-hygiene-prod-service.ms.com/rest/api/1.0/sdic-gate-control"
+          RESPONSE=$(curl -s -X POST "$API_ENDPOINT" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "control_gates": "trp",
+              "eonid": "${{ inputs.eonid }}"
+            }')
+          
+          # Process TRP response here
+
+      - name: Check RDA compliance
+        run: |
+          API_ENDPOINT="http://sdic-hygiene-prod-service.ms.com/rest/api/1.0/sdic-gate-control"
+          RESPONSE=$(curl -s -X POST "$API_ENDPOINT" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "control_gates": "rda",
+              "eonid": "${{ inputs.eonid }}"
+            }')
+          
+          # Process RDA response here
+
+      # Add more steps for processing responses and handling failures
+```
+
+This approach allows you to maintain the TRP and RDA check logic in a central location while easily applying it to multiple repositories.
+
+---
+Answer from Perplexity: pplx.ai/share
