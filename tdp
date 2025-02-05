@@ -1,82 +1,176 @@
-Certainly! I understand you want to create a similar workflow for TRP and RDA checks, using a shared workflow approach like the SBOM generation. Here's a caller workflow for TRP and RDA checks that follows the same pattern:
+Got it! You're looking to simplify the workflow by:  
+- **Skipping SBOM generation**  
+- **Building a simple payload** with:  
+  - `control_gates` hardcoded as `"trp"`  
+  - `eonid` fetched from the app repository  
+- Using the `api_gw.py` script to handle API calls, passing required parameters like `EV_CLIENT_ID`, `EV_CERT_FINGERPRINT`, keys, and `REPO.json`.
 
+---
+
+## ✅ **1. Central Workflow for RDA Validation**
+
+### **Updated Central Workflow (RDA Validation)**
 ```yaml
-name: TRP and RDA Compliance Check Caller
-
-on:
-  pull_request:
-    branches: [main, develop, sandbox]  # Adjust branch names as needed
-  workflow_dispatch:
-
-jobs:
-  call-workflow:
-    runs-on: evsharesvcnonprod
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Install GH CLI
-        run: sudo snap install gh --classic
-
-      - name: Trigger TRP and RDA Compliance Check workflow
-        env:
-          GH_TOKEN: ${{ secrets.GH_WORKFLOW_TOKEN }}
-        run: |
-          echo "${{ secrets.GH_WORKFLOW_TOKEN }}" | gh auth login --with-token
-          gh workflow run TRP-RDA-compliance-check.yml -R Eaton-Vance-Corp/SRE-Utilities -f eonid=$(git config --get custom.eonid)
-```
-
-This workflow:
-1. Triggers on pull requests to specified branches and manual dispatch.
-2. Runs on your custom runner 'evsharesvcnonprod'.
-3. Checks out the code and installs GitHub CLI.
-4. Triggers a shared workflow named 'TRP-RDA-compliance-check.yml' in the 'SRE-Utilities' repository.
-5. Passes the EONID as a parameter to the shared workflow.
-
-You'll need to create the shared workflow 'TRP-RDA-compliance-check.yml' in the 'SRE-Utilities' repository. Here's an example of what that shared workflow might look like:
-
-```yaml
-name: TRP and RDA Compliance Check
+name: RDA Validation Workflow
 
 on:
   workflow_call:
     inputs:
-      eonid:
+      call-owner:
+        description: Owner name (e.g., Eaton-Vance-Corp, Parametric)
+        required: true
+        type: string
+      call-repo:
+        description: Repository name
+        required: true
+        type: string
+      eon-id:
+        description: EON ID of the application repository
         required: true
         type: string
 
+  workflow_dispatch:
+    inputs:
+      call-owner:
+        description: Owner name (e.g., Eaton-Vance-Corp, Parametric)
+        required: true
+        type: string
+      call-repo:
+        description: Repository name
+        required: true
+        type: string
+      eon-id:
+        description: EON ID of the application repository
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
-  compliance-check:
-    runs-on: ubuntu-latest
+  rda-validation:
+    runs-on: evsharesvcnonprod
+    defaults:
+      run:
+        shell: bash
+
     steps:
-      - name: Check TRP compliance
-        run: |
-          API_ENDPOINT="http://sdic-hygiene-prod-service.ms.com/rest/api/1.0/sdic-gate-control"
-          RESPONSE=$(curl -s -X POST "$API_ENDPOINT" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "control_gates": "trp",
-              "eonid": "${{ inputs.eonid }}"
-            }')
-          
-          # Process TRP response here
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
-      - name: Check RDA compliance
-        run: |
-          API_ENDPOINT="http://sdic-hygiene-prod-service.ms.com/rest/api/1.0/sdic-gate-control"
-          RESPONSE=$(curl -s -X POST "$API_ENDPOINT" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "control_gates": "rda",
-              "eonid": "${{ inputs.eonid }}"
-            }')
-          
-          # Process RDA response here
+      - name: Setup Python
+        uses: actions/setup-python@v2.2.2
+        with:
+          python-version: 3.8
 
-      # Add more steps for processing responses and handling failures
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ./SBOM/requirements.txt
+
+      - name: Prepare Environment Variables
+        env:
+          EV_CLIENT_ID: ${{ secrets.SBOM_EV_CLIENT_ID }}
+          EV_CERT_FINGERPRINT: ${{ secrets.SBOM_EV_CERT_FINGERPRINT }}
+          PRIVATE_KEY: ${{ secrets.SBOM_EV_PRIVATE_KEY }}
+          PUBLIC_KEY: ${{ secrets.SBOM_EV_PUBLIC_KEY }}
+          OWNER: ${{ github.event.inputs.call-owner }}
+          REPO: ${{ github.event.inputs.call-repo }}
+          EONID: ${{ github.event.inputs.eon-id }}
+        run: |
+          echo "$PRIVATE_KEY" > "${OWNER}_private_key.pem"
+          echo "$PUBLIC_KEY" > "${OWNER}_public_key.cer"
+
+      - name: Trigger RDA Validation
+        env:
+          EV_CLIENT_ID: ${{ secrets.SBOM_EV_CLIENT_ID }}
+          EV_CERT_FINGERPRINT: ${{ secrets.SBOM_EV_CERT_FINGERPRINT }}
+          OWNER: ${{ github.event.inputs.call-owner }}
+          REPO: ${{ github.event.inputs.call-repo }}
+          EONID: ${{ github.event.inputs.eon-id }}
+        working-directory: ./SBOM
+        run: |
+          PAYLOAD='{"control_gates": "trp", "eonid": '"$EONID"'}'
+          echo "$PAYLOAD" > "${REPO}.json"
+
+          python api_gw.py ${EV_CLIENT_ID} ${EV_CERT_FINGERPRINT} "${OWNER}_private_key.pem" "${OWNER}_public_key.cer" "${REPO}.json"
+
+      - name: Clean Up
+        run: |
+          rm "${OWNER}_private_key.pem" "${OWNER}_public_key.cer"
 ```
 
-This approach allows you to maintain the TRP and RDA check logic in a central location while easily applying it to multiple repositories.
+---
+
+## ✅ **2. App Repo Workflow (PR Trigger)**
+
+### **App Repo Workflow Triggering Central RDA Validation**
+```yaml
+name: Trigger RDA Validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  trigger-central-workflow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call Central RDA Workflow
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: cloud-era/central-repo
+          event-type: rda-validation
+          client-payload: |
+            {
+              "call-owner": "${{ github.repository_owner }}",
+              "call-repo": "${{ github.event.repository.name }}",
+              "eon-id": "11027"  # Replace with dynamic fetch if needed
+            }
+```
 
 ---
-Answer from Perplexity: pplx.ai/share
+
+## ✅ **3. `api_gw.py` Sample Update**
+
+```python
+import sys
+import json
+import requests
+
+def main(client_id, cert_fingerprint, private_key_path, public_key_path, payload_file):
+    # Read JSON payload
+    with open(payload_file, 'r') as file:
+        payload = json.load(file)
+
+    api_url = "https://api-uat.morganstanley.com/msde/sbom/vl/api/vl/sdlc/validate_sdlc_gates/external"
+    headers = {
+        "Authorization": f"Bearer {client_id}",
+        "Content-Type": "application/json"
+    }
+
+    # Send API Request
+    response = requests.post(api_url, headers=headers, json=payload)
+
+    # Check API Response
+    if response.status_code == 200:
+        print(f"✅ RDA Validation Successful: {response.status_code}")
+    else:
+        print(f"❌ RDA Validation Failed: {response.status_code}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
+```
+
+---
+
+## 🚀 **Key Points:**
+- **No SBOM generation**  
+- **Payload Simplified:** `{ "control_gates": "trp", "eonid": 11027 }`  
+- **Centralized API Handling** with `api_gw.py`  
+- **Dynamic EONID** can be passed from the app repo  
+
+Let me know if this aligns with your expectations or if you'd like further adjustments!
