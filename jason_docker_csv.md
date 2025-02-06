@@ -1,115 +1,92 @@
-import os
+Certainly! I'll modify the script to run locally with the JFrog URL and API key directly in the script. Here's the updated version:
+
+```python
 import requests
 import csv
 import warnings
-import argparse
 from datetime import datetime
 
 # Suppress SSL verification warnings
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
-# Parse command-line arguments
-parser = argparse.ArgumentParser(description="Generate JFrog reports for multiple organizations.")
-parser.add_argument('--org', required=True, help="The organization name (e.g., 'ev' or 'ppa').")
-parser.add_argument('--jfrog-url', required=True, help="The JFrog Artifactory URL.")
-parser.add_argument('--output', required=True, help="The output directory for the generated report.")
-args = parser.parse_args()
-
-# Get JFrog Artifactory instance details
-JFROG_URL = args.jfrog_url.rstrip("/")  # Ensure no trailing slash
-ARTIFACTORY_TOKEN = os.getenv(f'JFROG_API_KEY_{args.org.upper()}')  # Get API key for the given organization
-
-if not ARTIFACTORY_TOKEN:
-    print(f"Error: JFROG_API_KEY_{args.org.upper()} is not set in environment variables.")
-    exit(1)
+# JFrog Artifactory configuration
+JFROG_URL = "https://your-artifactory-instance.jfrog.io/artifactory"  # Replace with your Artifactory URL
+API_KEY = "your-api-key-here"  # Replace with your API key
 
 # Headers for the API request
 headers = {
-    'Authorization': f'Bearer {ARTIFACTORY_TOKEN}',
+    'X-JFrog-Art-Api': API_KEY,
     'Accept': 'application/json',
 }
 
-# Function to fetch all repositories
-def fetch_repositories():
-    url = f"{JFROG_URL}/api/repositories"
+def fetch_docker_repositories():
+    url = f"{JFROG_URL}/api/repositories?type=docker"
     try:
         response = requests.get(url, headers=headers, verify=False)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
-        print(f"Failed to fetch repositories: {e}")
+        print(f"Failed to fetch Docker repositories: {e}")
         return []
 
-# Function to list all artifacts in a repository
-def list_artifacts(repo_name):
-    url = f"{JFROG_URL}/api/storage/{repo_name}?list&deep=1"
+def fetch_docker_images(repo_name):
+    url = f"{JFROG_URL}/api/docker/{repo_name}/v2/_catalog"
     try:
         response = requests.get(url, headers=headers, verify=False)
         response.raise_for_status()
-        return response.json().get("files", [])
+        return response.json().get("repositories", [])
     except requests.RequestException as e:
-        print(f"Failed to list artifacts for {repo_name}: {e}")
+        print(f"Failed to fetch Docker images for {repo_name}: {e}")
         return []
 
-# Function to process repository artifacts
-def process_repository(repo_name, package_type):
+def fetch_docker_tags(repo_name, image_name):
+    url = f"{JFROG_URL}/api/docker/{repo_name}/v2/{image_name}/tags/list"
     try:
-        artifact_list = list_artifacts(repo_name)
-        repo_details = []
+        response = requests.get(url, headers=headers, verify=False)
+        response.raise_for_status()
+        return response.json().get("tags", [])
+    except requests.RequestException as e:
+        print(f"Failed to fetch tags for {image_name} in {repo_name}: {e}")
+        return []
 
-        for artifact in artifact_list:
-            artifact_path = artifact.get("uri", "").lstrip("/")  # Remove leading slash if present
+def fetch_docker_manifest(repo_name, image_name, tag):
+    url = f"{JFROG_URL}/api/docker/{repo_name}/v2/{image_name}/manifests/{tag}"
+    try:
+        response = requests.get(url, headers=headers, verify=False)
+        response.raise_for_status()
+        return response.headers.get("Docker-Content-Digest", "")
+    except requests.RequestException as e:
+        print(f"Failed to fetch manifest for {image_name}:{tag} in {repo_name}: {e}")
+        return ""
 
-            # Skip .jfrog cache folder
-            if ".jfrog" in artifact_path:
-                continue
+def process_docker_repositories():
+    repositories = fetch_docker_repositories()
+    all_image_details = []
 
-            # Extract path segments
-            path_segments = artifact_path.split("/")
+    for repo in repositories:
+        repo_name = repo.get("key")
+        print(f"Processing Docker repository: {repo_name}")
 
-            # Extract version (last directory before filename)
-            if len(path_segments) >= 2:
-                version = path_segments[-2]
-            else:
-                version = ""
-
-            # Extract package name (everything after repo_name but before the version)
-            package_name = "/".join(path_segments[:-2]) if len(path_segments) > 2 else ""
-
-            # Ensure package name is correctly formatted
-            if package_name.startswith(repo_name + "/"):
-                package_name = package_name[len(repo_name) + 1:]
-
-            # Directly use the artifact URL from the response
-            artifact_url = f"{JFROG_URL}/artifactory/{repo_name}/{artifact_path}"
-
-            # Store only relevant Docker repository data
-            if package_type == "Docker":
-                repo_details.append({
-                    "repo_name": repo_name,
-                    "package_type": package_type,
-                    "package_name": package_name,
-                    "version": version,
-                    "url": artifact_url,  # Now using the direct artifact URL
-                    "created_date": artifact.get("lastModified", ""),
-                    "license": "",  # Leave blank if not available
-                    "secarch": "",  # Leave blank if not available
-                    "artifactory_instance": "frigate.jfrog.io"
+        images = fetch_docker_images(repo_name)
+        for image in images:
+            tags = fetch_docker_tags(repo_name, image)
+            for tag in tags:
+                digest = fetch_docker_manifest(repo_name, image, tag)
+                all_image_details.append({
+                    "Docker Image Name": f"{image}:{tag}",
+                    "CSP Placeholder": "JFrog Artifactory",
+                    "Resource Type": "Docker Image",
+                    "Unique ID": f"{repo_name}/{image}:{tag}",
+                    "Digest": digest,
+                    "Repo Path": f"{repo_name}/{image}"
                 })
 
-        return repo_details
+    return all_image_details
 
-    except Exception as e:
-        print(f"Skipping repository {repo_name} due to error: {e}")
-        return []  # Continue with other repositories
-
-# Function to save data to CSV
 def save_to_csv(data, filename):
-    headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'license', 'secarch', 'artifactory_instance']
+    headers = ['Docker Image Name', 'CSP Placeholder', 'Resource Type', 'Unique ID', 'Digest', 'Repo Path']
     
-    os.makedirs(os.path.dirname(filename), exist_ok=True)  # Ensure output directory exists
-
     with open(filename, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=headers)
         writer.writeheader()
@@ -117,32 +94,28 @@ def save_to_csv(data, filename):
     
     print(f"Data has been written to {filename}")
 
-# Main function to process all repositories
 def main():
-    repositories = fetch_repositories()
-    all_repo_details = []
-
-    if not repositories:
-        print("No repositories found or failed to fetch repositories.")
-        return
-
-    for repo in repositories:
-        repo_name = repo.get("key")
-        package_type = repo.get("packageType", "")
-
-        print(f"Processing repository: {repo_name} (Type: {package_type})")
-
-        try:
-            if package_type == "Docker":
-                repo_details = process_repository(repo_name, package_type)
-                all_repo_details.extend(repo_details)
-        except Exception as e:
-            print(f"Skipping repository {repo_name} due to unexpected error: {e}")
+    all_image_details = process_docker_repositories()
 
     # Save all details to CSV with a dynamic file name
     current_date = datetime.now().strftime('%Y-%m-%d')
-    output_file = os.path.join(args.output, f"EV_EOL_{current_date}_docker.csv")
-    save_to_csv(all_repo_details, output_file)
+    output_file = f"Docker_Images_Report_{current_date}.csv"
+    save_to_csv(all_image_details, output_file)
 
 if __name__ == '__main__':
     main()
+```
+
+To use this script:
+
+1. Replace `"https://your-artifactory-instance.jfrog.io/artifactory"` with your actual JFrog Artifactory URL.
+2. Replace `"your-api-key-here"` with your actual API key.
+3. Save the script to a file (e.g., `docker_image_report.py`).
+4. Run the script: `python docker_image_report.py`
+
+The script will generate a CSV file in the same directory with the name format `Docker_Images_Report_YYYY-MM-DD.csv`.
+
+This version doesn't require command-line arguments or environment variables, making it easier to run locally. Just make sure to keep your API key secure and not share the script with the key included.
+
+---
+Answer from Perplexity: pplx.ai/share
