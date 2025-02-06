@@ -1,10 +1,11 @@
-Certainly. Here's the full script with SSL verification disabled using `verify=False`. Please note that this approach is not recommended for production environments as it compromises security. Use it only for testing purposes or in controlled, secure environments.
+I apologize for the confusion. The error you're encountering suggests that the JSON response from the Artifactory API is not in the expected format. Let's modify the script to handle this issue and make it more robust. Here's an updated version of the script:
 
 ```python
 import requests
 import csv
 import base64
 import urllib3
+import json
 
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -20,10 +21,19 @@ headers = {
     "Content-Type": "application/json"
 }
 
+# Function to safely get JSON from response
+def get_json_safely(response):
+    try:
+        return response.json()
+    except json.JSONDecodeError:
+        print(f"Failed to decode JSON from response: {response.text}")
+        return {}
+
 # Get list of Docker repositories
 repos_url = f"{artifactory_url}/api/repositories?type=docker"
 repos_response = requests.get(repos_url, headers=headers, verify=False)
-repos = [repo["key"] for repo in repos_response.json()]
+repos_data = get_json_safely(repos_response)
+repos = [repo["key"] for repo in repos_data if isinstance(repo, dict) and "key" in repo]
 
 # Prepare CSV file
 csv_file = "all_docker_images_report.csv"
@@ -37,13 +47,15 @@ with open(csv_file, "w", newline="") as f:
         # Get list of Docker images for each repository
         catalog_url = f"{artifactory_url}/api/docker/{repo_name}/v2/_catalog"
         response = requests.get(catalog_url, headers=headers, verify=False)
-        images = response.json().get("repositories", [])
+        catalog_data = get_json_safely(response)
+        images = catalog_data.get("repositories", [])
 
         for image in images:
             # Get tags for each image
             tags_url = f"{artifactory_url}/api/docker/{repo_name}/v2/{image}/tags/list"
             tags_response = requests.get(tags_url, headers=headers, verify=False)
-            tags = tags_response.json().get("tags", [])
+            tags_data = get_json_safely(tags_response)
+            tags = tags_data.get("tags", [])
 
             for tag in tags:
                 # Get manifest for each tag
@@ -66,22 +78,12 @@ print(f"All Docker images report exported to {csv_file}")
 
 Key changes in this version:
 
-1. Added `import urllib3` at the beginning of the script.
-2. Disabled SSL warnings with `urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)`.
-3. Added `verify=False` to all `requests.get()` calls.
+1. Added a `get_json_safely` function to handle potential JSON decoding errors.
+2. Used the `get_json_safely` function for all API responses.
+3. Added error checking when parsing the repositories list.
+4. Used `.get()` method with default values to safely access dictionary keys.
 
-To use this script:
-
-1. Replace `your-artifactory-instance.jfrog.io` with your actual Artifactory URL.
-2. Replace `your-api-key` with your Artifactory API key.
-3. Install the required libraries if you haven't already:
-   ```
-   pip install requests urllib3
-   ```
-
-Run the script, and it will generate a CSV file named `all_docker_images_report.csv` containing information about all Docker images across all repositories in your Artifactory instance, bypassing SSL verification.
-
-Remember, using `verify=False` is not secure and should only be used for testing or in controlled environments. For production use, it's crucial to properly configure SSL certificates or use one of the other methods mentioned earlier to handle SSL verification correctly.
+These changes should make the script more resilient to unexpected API responses or data formats. If you still encounter issues, please provide more details about the specific error message or the point at which the script fails.
 
 ---
 Answer from Perplexity: pplx.ai/share
