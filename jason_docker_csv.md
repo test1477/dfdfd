@@ -1,4 +1,4 @@
-If you're getting an empty report, it could be due to several reasons. Let's modify the script to add more debugging information and error handling. This will help us understand where the process is failing. Here's an updated version of the script with additional logging:
+You're right. Let's modify the script to first get all Docker repositories, then extract the Docker images list from each repository. I'll also add brief comments explaining each step. Here's the updated script:
 
 ```python
 import requests
@@ -41,16 +41,15 @@ def make_request(url):
         logging.error(f"Request failed for URL {url}: {str(e)}")
         return None
 
-# Get list of Docker repositories
-repos_url = f"{artifactory_url}/api/repositories?type=docker"
-repos_response = make_request(repos_url)
-if repos_response:
-    repos_data = get_json_safely(repos_response)
-    repos = [repo["key"] for repo in repos_data if isinstance(repo, dict) and "key" in repo]
-    logging.info(f"Found {len(repos)} Docker repositories")
-else:
-    repos = []
-    logging.error("Failed to retrieve Docker repositories")
+# Step 1: Get list of all repositories
+logging.info("Fetching list of all repositories")
+all_repos_url = f"{artifactory_url}/api/repositories"
+all_repos_response = make_request(all_repos_url)
+all_repos = get_json_safely(all_repos_response)
+
+# Step 2: Filter for Docker repositories
+docker_repos = [repo for repo in all_repos if repo.get('packageType') == 'docker']
+logging.info(f"Found {len(docker_repos)} Docker repositories")
 
 # Prepare CSV file
 csv_file = "all_docker_images_report.csv"
@@ -60,10 +59,11 @@ with open(csv_file, "w", newline="") as f:
     writer = csv.DictWriter(f, fieldnames=csv_headers)
     writer.writeheader()
 
-    for repo_name in repos:
+    for repo in docker_repos:
+        repo_name = repo['key']
         logging.info(f"Processing repository: {repo_name}")
         
-        # Get list of Docker images for each repository
+        # Step 3: Get list of Docker images for each repository
         catalog_url = f"{artifactory_url}/api/docker/{repo_name}/v2/_catalog"
         catalog_response = make_request(catalog_url)
         if catalog_response:
@@ -77,7 +77,7 @@ with open(csv_file, "w", newline="") as f:
         for image in images:
             logging.info(f"Processing image: {image}")
             
-            # Get tags for each image
+            # Step 4: Get tags for each image
             tags_url = f"{artifactory_url}/api/docker/{repo_name}/v2/{image}/tags/list"
             tags_response = make_request(tags_url)
             if tags_response:
@@ -89,7 +89,7 @@ with open(csv_file, "w", newline="") as f:
                 logging.error(f"Failed to retrieve tags for image {image}")
 
             for tag in tags:
-                # Get manifest for each tag
+                # Step 5: Get manifest for each tag
                 manifest_url = f"{artifactory_url}/api/docker/{repo_name}/v2/{image}/manifests/{tag}"
                 manifest_response = make_request(manifest_url)
                 if manifest_response:
@@ -98,7 +98,7 @@ with open(csv_file, "w", newline="") as f:
                     digest = ""
                     logging.error(f"Failed to retrieve manifest for {image}:{tag}")
 
-                # Write to CSV
+                # Step 6: Write data to CSV
                 writer.writerow({
                     "Docker Image Name": f"{image}:{tag}",
                     "CSP Placeholder": "JFrog Artifactory",
@@ -112,26 +112,18 @@ with open(csv_file, "w", newline="") as f:
 logging.info(f"All Docker images report exported to {csv_file}")
 ```
 
-This updated script includes:
+This script does the following:
 
-1. More detailed logging at each step.
-2. Error handling for API requests.
-3. Checks to ensure we're not processing empty lists.
+1. Fetches a list of all repositories from Artifactory.
+2. Filters the repositories to include only those with `packageType` set to 'docker'.
+3. For each Docker repository, retrieves the list of images.
+4. For each image, fetches the list of tags.
+5. For each tag, retrieves the manifest to get the digest.
+6. Writes the collected information to a CSV file.
 
-To use this script:
+Make sure to replace `your-artifactory-instance.jfrog.io` with your actual Artifactory URL and `your-api-key` with your Artifactory API key.
 
-1. Replace `your-artifactory-instance.jfrog.io` with your actual Artifactory URL.
-2. Replace `your-api-key` with your Artifactory API key.
-3. Run the script and check the console output for any error messages or unexpected behavior.
-
-If you still get an empty report, please check the console output for any error messages. The most common reasons for an empty report could be:
-
-1. Incorrect Artifactory URL or API key.
-2. No Docker repositories found in your Artifactory instance.
-3. API permissions issues (the API key might not have sufficient permissions).
-4. Network connectivity issues.
-
-If you see any specific error messages in the console output, please share them, and I can provide more targeted assistance.
+This approach should ensure that you're capturing all Docker images across all Docker repositories in your Artifactory instance.
 
 ---
 Answer from Perplexity: pplx.ai/share
