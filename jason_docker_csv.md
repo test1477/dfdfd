@@ -1,9 +1,13 @@
-To retrieve all Docker images from all repositories in JFrog Artifactory, we can modify the previous script to iterate through all Docker repositories. Here's an updated Python script that accomplishes this:
+Certainly. Here's the full script with SSL verification disabled using `verify=False`. Please note that this approach is not recommended for production environments as it compromises security. Use it only for testing purposes or in controlled, secure environments.
 
 ```python
 import requests
 import csv
 import base64
+import urllib3
+
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Artifactory configuration
 artifactory_url = "https://your-artifactory-instance.jfrog.io/artifactory"
@@ -18,7 +22,7 @@ headers = {
 
 # Get list of Docker repositories
 repos_url = f"{artifactory_url}/api/repositories?type=docker"
-repos_response = requests.get(repos_url, headers=headers)
+repos_response = requests.get(repos_url, headers=headers, verify=False)
 repos = [repo["key"] for repo in repos_response.json()]
 
 # Prepare CSV file
@@ -32,19 +36,19 @@ with open(csv_file, "w", newline="") as f:
     for repo_name in repos:
         # Get list of Docker images for each repository
         catalog_url = f"{artifactory_url}/api/docker/{repo_name}/v2/_catalog"
-        response = requests.get(catalog_url, headers=headers)
+        response = requests.get(catalog_url, headers=headers, verify=False)
         images = response.json().get("repositories", [])
 
         for image in images:
             # Get tags for each image
             tags_url = f"{artifactory_url}/api/docker/{repo_name}/v2/{image}/tags/list"
-            tags_response = requests.get(tags_url, headers=headers)
+            tags_response = requests.get(tags_url, headers=headers, verify=False)
             tags = tags_response.json().get("tags", [])
 
             for tag in tags:
                 # Get manifest for each tag
                 manifest_url = f"{artifactory_url}/api/docker/{repo_name}/v2/{image}/manifests/{tag}"
-                manifest_response = requests.get(manifest_url, headers=headers)
+                manifest_response = requests.get(manifest_url, headers=headers, verify=False)
                 digest = manifest_response.headers.get("Docker-Content-Digest", "")
 
                 # Write to CSV
@@ -60,33 +64,24 @@ with open(csv_file, "w", newline="") as f:
 print(f"All Docker images report exported to {csv_file}")
 ```
 
-This script does the following:
+Key changes in this version:
 
-1. It first retrieves a list of all Docker repositories in your Artifactory instance.
-2. For each repository, it fetches the list of Docker images.
-3. For each image, it retrieves the list of tags.
-4. For each tag, it gets the manifest to obtain the digest.
-5. Finally, it writes all the collected information to a CSV file.
+1. Added `import urllib3` at the beginning of the script.
+2. Disabled SSL warnings with `urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)`.
+3. Added `verify=False` to all `requests.get()` calls.
 
 To use this script:
 
 1. Replace `your-artifactory-instance.jfrog.io` with your actual Artifactory URL.
 2. Replace `your-api-key` with your Artifactory API key.
-3. Install the `requests` library if you haven't already (`pip install requests`).
+3. Install the required libraries if you haven't already:
+   ```
+   pip install requests urllib3
+   ```
 
-Run the script, and it will generate a CSV file named `all_docker_images_report.csv` containing information about all Docker images across all repositories in your Artifactory instance[7][8].
+Run the script, and it will generate a CSV file named `all_docker_images_report.csv` containing information about all Docker images across all repositories in your Artifactory instance, bypassing SSL verification.
 
-Note: This script assumes you're using API key authentication. If you're using a different authentication method, you may need to adjust the `auth` and `headers` accordingly.
-
-Citations:
-[1] https://stackoverflow.com/questions/69075946/artifactory-list-all-docker-images-in-all-repos-using-aql
-[2] https://www.reddit.com/r/devops/comments/lypytb/how_to_query_a_docker_repo_on_an_artifactory/
-[3] https://jfrog.com/help/r/jfrog-artifactory-documentation/browse-docker-v1-repositories
-[4] https://www.reddit.com/r/docker/comments/lxt9pp/how_to_query_a_docker_registry_for_a_list_of/
-[5] https://www.docker.com/blog/using-docker-desktop-and-jfrog-artifactory-for-the-enterprise/
-[6] https://forums.docker.com/t/docker-hub-in-artifactory-repository-remote/136034
-[7] https://jfrog.com/help/r/jfrog-artifactory-documentation/list-docker-images
-[8] https://jfrog.com/help/r/jfrog-artifactory-documentation/docker-registry
+Remember, using `verify=False` is not secure and should only be used for testing or in controlled environments. For production use, it's crucial to properly configure SSL certificates or use one of the other methods mentioned earlier to handle SSL verification correctly.
 
 ---
 Answer from Perplexity: pplx.ai/share
