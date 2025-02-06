@@ -1,224 +1,92 @@
-If you can see Docker images under the **package type `docker`** in the JFrog Artifactory UI, but the script is not fetching any data, the issue might be with how the script is querying the Artifactory API. Since the `curl` commands (1 and 2) are working and returning data, we can use the same logic in the script to fix it.
-
-Let’s update the script to ensure it correctly fetches Docker images and their metadata.
-
----
-
-### **Updated Python Script**
-
-Here’s the updated script with fixes and improvements:
+To retrieve all Docker images from all repositories in JFrog Artifactory, we can modify the previous script to iterate through all Docker repositories. Here's an updated Python script that accomplishes this:
 
 ```python
 import requests
 import csv
-import os
+import base64
 
-# ==================================================
-# Configuration Section
-# ==================================================
+# Artifactory configuration
+artifactory_url = "https://your-artifactory-instance.jfrog.io/artifactory"
+api_key = "your-api-key"
 
-# JFrog Artifactory credentials and URL
-ARTIFACTORY_URL = "https://<your-artifactory-domain>/artifactory"  # Replace with your Artifactory URL
-API_KEY = "<your-api-key>"  # Replace with your Artifactory API key
-CA_CERT_PATH = "/path/to/artifactory-ca.crt"  # Path to your CA certificate (if using self-signed SSL)
-
-# Headers for API requests
+# Authentication
+auth = base64.b64encode(f"username:{api_key}".encode()).decode()
 headers = {
-    "X-JFrog-Art-Api": API_KEY,  # API key for authentication
-    "Content-Type": "application/json"  # Specify JSON content type
+    "Authorization": f"Basic {auth}",
+    "Content-Type": "application/json"
 }
 
-# Disable SSL verification if CA certificate is not available
-VERIFY_SSL = True
-if not os.path.exists(CA_CERT_PATH):
-    print("CA certificate not found. Disabling SSL verification.")
-    VERIFY_SSL = False
+# Get list of Docker repositories
+repos_url = f"{artifactory_url}/api/repositories?type=docker"
+repos_response = requests.get(repos_url, headers=headers)
+repos = [repo["key"] for repo in repos_response.json()]
 
-# ==================================================
-# Function Definitions
-# ==================================================
+# Prepare CSV file
+csv_file = "all_docker_images_report.csv"
+csv_headers = ["Docker Image Name", "CSP Placeholder", "Resource Type", "Unique ID", "Digest", "Repo Path"]
 
-def get_all_repositories():
-    """
-    Fetch all Docker repositories in the organization.
-    Returns a list of repository names.
-    """
-    url = f"{ARTIFACTORY_URL}/api/repositories"
-    print(f"Fetching repositories from {url}...")
-    response = requests.get(url, headers=headers, verify=VERIFY_SSL)
-    if response.status_code != 200:
-        raise Exception(f"Failed to fetch repositories: {response.text}")
-    repositories = [repo["key"] for repo in response.json() if repo["type"] == "DOCKER"]
-    print(f"Found {len(repositories)} Docker repositories: {repositories}")
-    return repositories
+with open(csv_file, "w", newline="") as f:
+    writer = csv.DictWriter(f, fieldnames=csv_headers)
+    writer.writeheader()
 
-def get_docker_images(repo_name):
-    """
-    Fetch all Docker images in a specific repository.
-    Returns a list of image names.
-    """
-    url = f"{ARTIFACTORY_URL}/api/docker/{repo_name}/v2/_catalog"
-    print(f"Fetching Docker images from {url}...")
-    response = requests.get(url, headers=headers, verify=VERIFY_SSL)
-    if response.status_code != 200:
-        raise Exception(f"Failed to fetch Docker images from {repo_name}: {response.text}")
-    images = response.json().get("repositories", [])
-    print(f"Found {len(images)} images in repository {repo_name}: {images}")
-    return images
+    for repo_name in repos:
+        # Get list of Docker images for each repository
+        catalog_url = f"{artifactory_url}/api/docker/{repo_name}/v2/_catalog"
+        response = requests.get(catalog_url, headers=headers)
+        images = response.json().get("repositories", [])
 
-def get_image_tags(repo_name, image_name):
-    """
-    Fetch all tags for a specific Docker image in a repository.
-    Returns a list of tags.
-    """
-    url = f"{ARTIFACTORY_URL}/api/docker/{repo_name}/v2/{image_name}/tags/list"
-    print(f"Fetching tags for image {image_name} in repository {repo_name}...")
-    response = requests.get(url, headers=headers, verify=VERIFY_SSL)
-    if response.status_code != 200:
-        raise Exception(f"Failed to fetch tags for {image_name} in {repo_name}: {response.text}")
-    tags = response.json().get("tags", [])
-    print(f"Found {len(tags)} tags for image {image_name}: {tags}")
-    return tags
+        for image in images:
+            # Get tags for each image
+            tags_url = f"{artifactory_url}/api/docker/{repo_name}/v2/{image}/tags/list"
+            tags_response = requests.get(tags_url, headers=headers)
+            tags = tags_response.json().get("tags", [])
 
-def get_image_manifest(repo_name, image_name, tag):
-    """
-    Fetch the manifest for a specific Docker image tag.
-    Returns the image digest.
-    """
-    url = f"{ARTIFACTORY_URL}/api/docker/{repo_name}/v2/{image_name}/manifests/{tag}"
-    print(f"Fetching manifest for image {image_name}:{tag} in repository {repo_name}...")
-    response = requests.get(url, headers=headers, verify=VERIFY_SSL)
-    if response.status_code != 200:
-        raise Exception(f"Failed to fetch manifest for {image_name}:{tag} in {repo_name}: {response.text}")
-    digest = response.headers.get("Docker-Content-Digest")
-    print(f"Digest for image {image_name}:{tag}: {digest}")
-    return digest
+            for tag in tags:
+                # Get manifest for each tag
+                manifest_url = f"{artifactory_url}/api/docker/{repo_name}/v2/{image}/manifests/{tag}"
+                manifest_response = requests.get(manifest_url, headers=headers)
+                digest = manifest_response.headers.get("Docker-Content-Digest", "")
 
-def generate_csv_report(output_file="docker_images_report.csv"):
-    """
-    Generate a CSV report of all Docker images in the organization.
-    The report includes the following columns:
-    - Resource_Name: Name of the Docker image
-    - CSP Placeholder: Placeholder for CSP information
-    - Resource Type: Type of resource (e.g., Container Image)
-    - Unique ID: Tag of the Docker image
-    - Digest: Digest of the Docker image
-    - Registry: Full path to the Docker image in Artifactory
-    """
-    print("Starting CSV report generation...")
-    repositories = get_all_repositories()
-    if not repositories:
-        print("No Docker repositories found. Exiting.")
-        return
+                # Write to CSV
+                writer.writerow({
+                    "Docker Image Name": f"{image}:{tag}",
+                    "CSP Placeholder": "JFrog Artifactory",
+                    "Resource Type": "Docker Image",
+                    "Unique ID": f"{repo_name}/{image}:{tag}",
+                    "Digest": digest,
+                    "Repo Path": f"{repo_name}/{image}"
+                })
 
-    with open(output_file, mode="w", newline="") as csv_file:
-        writer = csv.writer(csv_file)
-        # Write the header row
-        writer.writerow(["Resource_Name", "CSP Placeholder", "Resource Type", "Unique ID", "Digest", "Registry"])
-
-        # Iterate over all repositories
-        for repo_name in repositories:
-            try:
-                print(f"Processing repository: {repo_name}")
-                images = get_docker_images(repo_name)
-                if not images:
-                    print(f"No images found in repository {repo_name}. Skipping.")
-                    continue
-
-                # Iterate over all images in the repository
-                for image_name in images:
-                    tags = get_image_tags(repo_name, image_name)
-                    if not tags:
-                        print(f"No tags found for image {image_name}. Skipping.")
-                        continue
-
-                    # Iterate over all tags for the image
-                    for tag in tags:
-                        digest = get_image_manifest(repo_name, image_name, tag)
-                        registry_path = f"{ARTIFACTORY_URL}/{repo_name}/{image_name}:{tag}"
-                        # Write the row to the CSV file
-                        writer.writerow([image_name, "CSP_PLACEHOLDER", "Container Image", tag, digest, registry_path])
-            except Exception as e:
-                print(f"Error processing repository {repo_name}: {e}")
-
-    print(f"CSV report generated: {output_file}")
-
-# ==================================================
-# Main Execution
-# ==================================================
-
-if __name__ == "__main__":
-    print("Starting script...")
-    generate_csv_report()
-    print("Script completed.")
+print(f"All Docker images report exported to {csv_file}")
 ```
 
----
+This script does the following:
 
-### **Key Fixes**
-1. **Repository Filtering**:
-   - The script now correctly filters repositories by type `DOCKER` using the `/api/repositories` endpoint.
+1. It first retrieves a list of all Docker repositories in your Artifactory instance.
+2. For each repository, it fetches the list of Docker images.
+3. For each image, it retrieves the list of tags.
+4. For each tag, it gets the manifest to obtain the digest.
+5. Finally, it writes all the collected information to a CSV file.
 
-2. **Debugging Statements**:
-   - Added `print` statements to log the progress of the script and help identify issues (e.g., no repositories, no images, etc.).
+To use this script:
 
-3. **Error Handling**:
-   - The script skips repositories or images that encounter errors and continues processing the next repository.
+1. Replace `your-artifactory-instance.jfrog.io` with your actual Artifactory URL.
+2. Replace `your-api-key` with your Artifactory API key.
+3. Install the `requests` library if you haven't already (`pip install requests`).
 
-4. **CSV Report**:
-   - The script generates a CSV report with the following columns:
-     - `Resource_Name`: Name of the Docker image.
-     - `CSP Placeholder`: Placeholder for CSP information.
-     - `Resource Type`: Type of resource (e.g., Container Image).
-     - `Unique ID`: Tag of the Docker image.
-     - `Digest`: Digest of the Docker image.
-     - `Registry`: Full path to the Docker image in Artifactory.
+Run the script, and it will generate a CSV file named `all_docker_images_report.csv` containing information about all Docker images across all repositories in your Artifactory instance[7][8].
 
----
+Note: This script assumes you're using API key authentication. If you're using a different authentication method, you may need to adjust the `auth` and `headers` accordingly.
 
-### **Running the Script**
-1. Save the script to a file, e.g., `generate_docker_report_org.py`.
-2. Replace the placeholders (`<your-artifactory-domain>`, `<your-api-key>`, etc.) with your actual values.
-3. Run the script:
-   ```bash
-   python generate_docker_report_org.py
-   ```
-4. Check the console output for debugging information.
-5. The CSV report will be saved as `docker_images_report.csv` in the current directory.
+Citations:
+[1] https://stackoverflow.com/questions/69075946/artifactory-list-all-docker-images-in-all-repos-using-aql
+[2] https://www.reddit.com/r/devops/comments/lypytb/how_to_query_a_docker_repo_on_an_artifactory/
+[3] https://jfrog.com/help/r/jfrog-artifactory-documentation/browse-docker-v1-repositories
+[4] https://www.reddit.com/r/docker/comments/lxt9pp/how_to_query_a_docker_registry_for_a_list_of/
+[5] https://www.docker.com/blog/using-docker-desktop-and-jfrog-artifactory-for-the-enterprise/
+[6] https://forums.docker.com/t/docker-hub-in-artifactory-repository-remote/136034
+[7] https://jfrog.com/help/r/jfrog-artifactory-documentation/list-docker-images
+[8] https://jfrog.com/help/r/jfrog-artifactory-documentation/docker-registry
 
 ---
-
-### **Example Output**
-#### Console Output:
-```
-Starting script...
-Fetching repositories from https://artifactory.example.com/artifactory/api/repositories...
-Found 2 Docker repositories: ['docker-repo-1', 'docker-repo-2']
-Starting CSV report generation...
-Processing repository: docker-repo-1
-Fetching Docker images from https://artifactory.example.com/artifactory/api/docker/docker-repo-1/v2/_catalog...
-Found 3 images in repository docker-repo-1: ['image1', 'image2', 'image3']
-Fetching tags for image image1 in repository docker-repo-1...
-Found 2 tags for image image1: ['latest', 'v1.0']
-Fetching manifest for image image1:latest in repository docker-repo-1...
-Digest for image image1:latest: sha256:abc123...
-...
-CSV report generated: docker_images_report.csv
-Script completed.
-```
-
-#### CSV Output:
-| Resource_Name | CSP Placeholder | Resource Type   | Unique ID | Digest                                      | Registry                                              |
-|---------------|-----------------|-----------------|-----------|---------------------------------------------|-------------------------------------------------------|
-| image1        | CSP_PLACEHOLDER | Container Image | latest    | sha256:abc123...                            | https://artifactory.example.com/artifactory/docker-repo-1/image1:latest |
-| image1        | CSP_PLACEHOLDER | Container Image | v1.0      | sha256:def456...                            | https://artifactory.example.com/artifactory/docker-repo-1/image1:v1.0   |
-
----
-
-### **Troubleshooting**
-- If the script still doesn’t fetch data:
-  - Verify that the API key has the necessary permissions.
-  - Check the Artifactory logs for any errors.
-  - Use the `curl` commands to manually verify the API responses.
-
-Let me know if you need further assistance!
+Answer from Perplexity: pplx.ai/share
