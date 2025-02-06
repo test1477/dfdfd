@@ -1,12 +1,15 @@
-Got it! I'll ensure that:  
-
-✅ **Repo name is extracted as `docker-images`** (first segment of the path).  
-✅ **Package name is everything after the repo name** (excluding it).  
-✅ **Version is extracted correctly from the last directory before the filename**.  
+Got it! The **`repo_name` (e.g., `docker-images`) was missing from the `package_name` extraction** but should be present in the `url`. I’ve fixed that.
 
 ---
 
-### **Updated Script**
+### **Final Fixes:**
+✅ **Ensure `repo_name` is correctly included in the URL**  
+✅ **Ensure `package_name` includes everything after `repo_name`, but before the version**  
+✅ **Avoid `.jfrog` cache folders**  
+
+---
+
+### **🚀 Full Corrected Script**
 ```python
 import os
 import requests
@@ -28,7 +31,7 @@ parser.add_argument('--output', required=True, help="The output directory for th
 args = parser.parse_args()
 
 # Get JFrog Artifactory instance details
-JFROG_URL = args.jfrog_url.rstrip('/')  # Ensure no trailing slash
+JFROG_URL = args.jfrog_url.rstrip("/")  # Ensure no trailing slash
 ARTIFACTORY_TOKEN = os.getenv(f'JFROG_API_KEY_{args.org.upper()}')  # Get API key for the given organization
 
 if not ARTIFACTORY_TOKEN:
@@ -43,7 +46,9 @@ headers = {
 
 # Function to fetch all repositories
 def fetch_repositories():
-    """Fetches a list of all repositories in the Artifactory instance."""
+    """
+    Fetches a list of all repositories in the Artifactory instance.
+    """
     url = f"{JFROG_URL}/api/repositories"
     try:
         response = requests.get(url, headers=headers, verify=False)
@@ -55,7 +60,9 @@ def fetch_repositories():
 
 # Function to list all artifacts in a repository
 def list_artifacts(repo_name):
-    """Recursively fetches all artifacts in the specified repository."""
+    """
+    Recursively fetches all artifacts in the specified repository.
+    """
     url = f"{JFROG_URL}/api/storage/{repo_name}?list&deep=1"
     try:
         response = requests.get(url, headers=headers, verify=False)
@@ -66,32 +73,39 @@ def list_artifacts(repo_name):
         return []
 
 # Function to process repository artifacts
-def process_repository(repo_path, package_type):
-    """Processes all artifacts in a repository while excluding `.jfrog` cache folders."""
+def process_repository(repo_name, package_type):
+    """
+    Processes all artifacts in a repository while avoiding `.jfrog` cache folders.
+    """
     try:
-        artifact_list = list_artifacts(repo_path)
+        artifact_list = list_artifacts(repo_name)
         repo_details = []
 
         for artifact in artifact_list:
             artifact_path = artifact.get("uri", "").lstrip("/")  # Remove leading slash if present
 
-            # **Skip .jfrog cache folder**
+            # Skip .jfrog cache folder
             if ".jfrog" in artifact_path:
                 continue
 
-            # **Extract repo name (first segment of repo_path)**
-            repo_segments = repo_path.split("/")
-            repo_name = repo_segments[0] if repo_segments else repo_path  # Extract first part as repo name
-
-            # **Extract package name (everything after repo_name)**
-            package_name = artifact_path.replace(repo_name + "/", "", 1)  # Remove the first occurrence of repo_name/
-
-            # **Extract version (last directory before filename)**
+            # Extract path segments
             path_segments = artifact_path.split("/")
-            version = path_segments[-2] if len(path_segments) >= 2 else ""
 
-            # **Construct the full artifact URL**
-            artifact_url = f"{JFROG_URL}/{repo_path}/{artifact_path}"
+            # Extract version (last directory before filename)
+            if len(path_segments) >= 2:
+                version = path_segments[-2]
+            else:
+                version = ""
+
+            # Extract package name (everything after repo_name but before the version)
+            package_name = "/".join(path_segments[:-2]) if len(path_segments) > 2 else ""
+
+            # Ensure package name is correctly formatted
+            if package_name.startswith(repo_name + "/"):
+                package_name = package_name[len(repo_name) + 1:]
+
+            # Construct the full artifact URL (ensuring repo_name is included)
+            artifact_url = f"{JFROG_URL}/artifactory/{repo_name}/{artifact_path}"
 
             # Store only relevant Docker repository data
             if package_type == "Docker":
@@ -110,12 +124,14 @@ def process_repository(repo_path, package_type):
         return repo_details
 
     except Exception as e:
-        print(f"Skipping repository {repo_path} due to error: {e}")
+        print(f"Skipping repository {repo_name} due to error: {e}")
         return []  # Continue with other repositories
 
 # Function to save data to CSV
 def save_to_csv(data, filename):
-    """Saves extracted metadata to a CSV file."""
+    """
+    Saves extracted metadata to a CSV file.
+    """
     headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'license', 'secarch', 'artifactory_instance']
     
     os.makedirs(os.path.dirname(filename), exist_ok=True)  # Ensure output directory exists
@@ -129,7 +145,9 @@ def save_to_csv(data, filename):
 
 # Main function to process all repositories
 def main():
-    """Main function to process all repositories and extract metadata."""
+    """
+    Main function to process all repositories and extract metadata.
+    """
     repositories = fetch_repositories()
     all_repo_details = []
 
@@ -138,18 +156,18 @@ def main():
         return
 
     for repo in repositories:
-        repo_path = repo.get("key")
+        repo_name = repo.get("key")
         package_type = repo.get("packageType", "")
 
-        print(f"Processing repository: {repo_path} (Type: {package_type})")
+        print(f"Processing repository: {repo_name} (Type: {package_type})")
 
         try:
             # Process only Docker repositories
             if package_type == "Docker":
-                repo_details = process_repository(repo_path, package_type)
+                repo_details = process_repository(repo_name, package_type)
                 all_repo_details.extend(repo_details)
         except Exception as e:
-            print(f"Skipping repository {repo_path} due to unexpected error: {e}")
+            print(f"Skipping repository {repo_name} due to unexpected error: {e}")
 
     # Save all details to CSV with a dynamic file name
     current_date = datetime.now().strftime('%Y-%m-%d')
@@ -162,35 +180,42 @@ if __name__ == '__main__':
 
 ---
 
-### **Key Fixes & Improvements**
-✅ **Corrected `repo_name` extraction** → Now `repo_name` is just **the first segment** (e.g., `docker-images`).  
-✅ **Corrected `package_name` extraction** → Now it contains **everything after the `repo_name`** (e.g., `eaton-vance-corp/angular-apm-dd/frontend/angular-apm-dd`).  
-✅ **Fixed version extraction** → Now correctly takes **the last directory before the filename**.  
-✅ **Ensures `.jfrog` cache folder is excluded** → Artifacts in `.jfrog` are **not included**.  
+### **🔧 Fixes & Enhancements**
+✅ **Ensures `repo_name` is included in the URL**  
+- **Fix:** `artifact_url = f"{JFROG_URL}/artifactory/{repo_name}/{artifact_path}"`  
+
+✅ **Ensures `package_name` correctly excludes `repo_name` but includes the full path before the version**  
+- Example Fix:  
+  ```python
+  package_name = "/".join(path_segments[:-2]) if len(path_segments) > 2 else ""
+  if package_name.startswith(repo_name + "/"):
+      package_name = package_name[len(repo_name) + 1:]
+  ```
+- **Before (Incorrect Package Name):**  
+  ```
+  eaton-vance-corp/angular-apm-dd/frontend/angular-apm-dd/v1.0.0/manifest
+  ```
+- **Now (Correct Package Name):**  
+  ```
+  eaton-vance-corp/angular-apm-dd/frontend/angular-apm-dd
+  ```
+
+✅ **Skips `.jfrog` cache folders**  
+
+✅ **Outputs a properly formatted CSV**  
 
 ---
 
-### **Example Input & Expected Output**
-#### **Example Artifact Path**
-```
-https://frigate.jfrog.io/artifactory/docker-images/eaton-vance-corp/angular-apm-dd/frontend/angular-apm-dd/v1.0.0/manifest.json
-```
-#### **Extracted Values**
-| **Field**         | **Extracted Value**                                         |
-|-------------------|------------------------------------------------------------|
-| **Repo Name**     | `docker-images`                                            |
-| **Package Name**  | `eaton-vance-corp/angular-apm-dd/frontend/angular-apm-dd`  |
-| **Version**       | `v1.0.0`                                                   |
-| **URL**          | `https://frigate.jfrog.io/artifactory/docker-images/eaton-vance-corp/angular-apm-dd/frontend/angular-apm-dd/v1.0.0/manifest.json` |
+### **📌 Final Example Output (CSV)**
+| repo_name      | package_type | package_name                                  | version  | url                                                                                   | created_date | license | secarch | artifactory_instance |
+|---------------|-------------|-----------------------------------------------|---------|--------------------------------------------------------------------------------------|--------------|---------|---------|----------------------|
+| docker-images | Docker      | eaton-vance-corp/angular-apm-dd/frontend/angular-apm-dd | v1.0.0  | https://frigate.jfrog.io/artifactory/docker-images/eaton-vance-corp/.../manifest.json | 2024-02-05   |         |         | frigate.jfrog.io     |
 
 ---
 
-### **How to Run**
-```bash
-python script_name.py --org ev --jfrog-url https://frigate.jfrog.io/artifactory --output c:/sre/
-```
-This will output a **CSV file** in `c:/sre/EV_EOL_YYYY-MM-DD_docker.csv`.
+### **🚀 Summary**
+✅ Fixes the `repo_name` issue in the **URL**  
+✅ Fixes **`package_name` extraction** (removes `repo_name` but keeps everything before the version)  
+✅ Properly skips `.jfrog` cache folders  
 
----
-
-Let me know if this is now perfect or if any more tweaks are needed! 🚀
+This should now be fully correct! Let me know if you need any more refinements. 😊
