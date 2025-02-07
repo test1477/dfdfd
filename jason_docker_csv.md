@@ -1,6 +1,25 @@
-I apologize for the confusion. Let's troubleshoot this step by step. We'll modify the script to provide more detailed logging and error handling to identify where the process is failing. Here's an updated version of the script with enhanced debugging:
+Certainly! Here's the full script with the modifications to list all repositories and filter for Docker repositories:
 
 ```python
+"""
+JFrog Artifactory Docker Image Metadata Exporter
+
+This script retrieves metadata for all Docker images across all Docker repositories
+in a JFrog Artifactory instance. It generates a CSV report containing information
+about each image, including resource name, CSP placeholder, resource type, unique ID,
+digest, and repository path.
+
+Author: [Your Name]
+Date: [Current Date]
+Version: 1.1
+
+Usage:
+1. Set the JFROG_URL and API_KEY variables with your Artifactory instance details.
+2. Run the script to generate a CSV report of all Docker images across all repositories.
+
+Output: A CSV file named 'Docker_Images_Report_[DATE].csv' in the same directory as the script.
+"""
+
 import requests
 import csv
 import warnings
@@ -9,7 +28,7 @@ import logging
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Suppress SSL verification warnings
 warnings.simplefilter('ignore', InsecureRequestWarning)
@@ -26,11 +45,8 @@ headers = {
 
 def make_request(url):
     try:
-        logging.debug(f"Making request to: {url}")
         response = requests.get(url, headers=headers, verify=False)
         response.raise_for_status()
-        logging.debug(f"Response status code: {response.status_code}")
-        logging.debug(f"Response content: {response.text[:200]}...")  # Log first 200 characters of response
         return response
     except requests.RequestException as e:
         logging.error(f"Request failed for URL {url}: {str(e)}")
@@ -58,9 +74,8 @@ def fetch_docker_images(repo_name):
     response = make_request(url)
     if response:
         images = response.json().get("repositories", [])
-        filtered_images = [img for img in images if not img.startswith('.jfrog')]
-        logging.info(f"Found {len(filtered_images)} images in repository {repo_name}")
-        return filtered_images
+        logging.info(f"Found {len(images)} images in repository {repo_name}")
+        return images
     return []
 
 def fetch_docker_tags(repo_name, image_name):
@@ -79,16 +94,22 @@ def fetch_docker_manifest(repo_name, image_name, tag):
         digest = response.headers.get("Docker-Content-Digest", "")
         logging.info(f"Retrieved digest for {image_name}:{tag} in {repo_name}")
         return digest
-    elif response and response.status_code == 403:
-        logging.warning(f"Download blocked for {image_name}:{tag} in {repo_name} due to Xray policy")
-        return "BLOCKED"
     return ""
 
 def process_docker_repositories():
     all_image_details = []
     
+    # Debug: Print all repositories
+    all_repos = fetch_all_repositories()
+    print("All repository names:")
+    for repo in all_repos:
+        print(f"- {repo['key']} (Type: {repo.get('packageType', 'Unknown')})")
+
+    # Debug: Print Docker repositories
     docker_repos = fetch_docker_repositories()
-    logging.info(f"Processing {len(docker_repos)} Docker repositories")
+    print("Docker repository names:")
+    for repo in docker_repos:
+        print(f"- {repo}")
 
     for repo_name in docker_repos:
         logging.info(f"Processing repository: {repo_name}")
@@ -97,17 +118,14 @@ def process_docker_repositories():
             tags = fetch_docker_tags(repo_name, image)
             for tag in tags:
                 digest = fetch_docker_manifest(repo_name, image, tag)
-                if digest != "BLOCKED":
-                    all_image_details.append({
-                        "Resource Name": image.split('/')[-1],
-                        "CSP Placeholder": "JFrog Artifactory",
-                        "Resource Type": "Container Image",
-                        "Unique ID": digest,
-                        "Digest": digest,
-                        "Repo Path": f"{repo_name}/{image}"
-                    })
-                else:
-                    logging.warning(f"Skipping blocked artifact: {repo_name}/{image}:{tag}")
+                all_image_details.append({
+                    "Resource Name": image.split('/')[-1],
+                    "CSP Placeholder": "JFrog Artifactory",
+                    "Resource Type": "Container Image",
+                    "Unique ID": digest,
+                    "Digest": digest,
+                    "Repo Path": f"{repo_name}/{image}"
+                })
 
     logging.info(f"Total Docker images processed: {len(all_image_details)}")
     return all_image_details
@@ -139,15 +157,19 @@ if __name__ == '__main__':
     main()
 ```
 
-This updated script includes more detailed logging at the DEBUG level. It will log the URL of each request, the response status code, and the first 200 characters of each response. This should help identify where the script is failing or if it's not receiving the expected data from the Artifactory API.
+This script now includes:
+
+1. A function to fetch all repositories (`fetch_all_repositories`).
+2. A modified `fetch_docker_repositories` function that filters for Docker repositories.
+3. Debug print statements to show all repository names and their types, as well as the filtered Docker repository names.
 
 To use this script:
 
 1. Replace `"https://your-artifactory-instance.jfrog.io/artifactory"` with your actual JFrog Artifactory URL.
 2. Replace `"your-api-key-here"` with your actual API key.
-3. Run the script and check the detailed log output.
+3. Run the script.
 
-If you're still getting an empty output, please run this script and provide the log output. This will help us identify exactly where the process is failing and why no Docker images are being found or processed.
+This should help identify if there are any Docker repositories in your Artifactory instance and provide more information about all available repositories. If you still don't see any Docker repositories, you may need to check your Artifactory configuration or consult with your Artifactory administrator.
 
 ---
 Answer from Perplexity: pplx.ai/share
