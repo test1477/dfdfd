@@ -1,10 +1,11 @@
-Certainly! I understand you want to use `urlparse` to extract the package name and repo path. Here's the updated script incorporating this approach:
+Certainly! Here's the full script with the updated `extract_package_info` function and a placeholder for CSP (Cloud Service Provider). I've added a 'csp' field to the output, which you can populate as needed:
 
 ```python
 import requests
 import csv
 import os
 import hashlib
+import re
 from urllib.parse import urlparse
 
 # Constants
@@ -37,16 +38,15 @@ def list_artifacts(repo_name):
         return []
 
 def extract_package_info(url):
-    """
-    Extracts the package name and repo path from the URL.
-    The package name is the second-to-last segment.
-    The repo path is everything up to but not including the package name and version.
-    """
     parsed_url = urlparse(url)
     path_segments = parsed_url.path.strip("/").split("/")
     
-    package_name = path_segments[-2] if len(path_segments) > 2 else ""
-    repo_path = "/".join(path_segments[:-2])
+    # Find the index of the first segment that looks like a version number
+    version_index = next((i for i, segment in enumerate(path_segments) if re.match(r'\d+(\.\d+)*', segment)), len(path_segments))
+    
+    # Package name is everything up to but not including the version
+    package_name = "/".join(path_segments[:version_index])
+    repo_path = "/".join(path_segments[:version_index])
     
     return package_name, repo_path
 
@@ -79,7 +79,8 @@ def process_repository(repo_name):
                 "package_name": package_name,
                 "url": artifact_url,
                 "unique_id": unique_id,
-                "digest": unique_id
+                "digest": unique_id,
+                "csp": "placeholder"  # Add your logic to determine CSP here
             })
 
         return repo_details
@@ -90,7 +91,7 @@ def process_repository(repo_name):
 
 def save_to_csv(data, filename):
     """Saves extracted metadata to a CSV file."""
-    headers = ['repo_path', 'package_name', 'url', 'unique_id', 'digest']
+    headers = ['repo_path', 'package_name', 'url', 'unique_id', 'digest', 'csp']
     
     os.makedirs(os.path.dirname(filename), exist_ok=True)
 
@@ -124,7 +125,17 @@ if __name__ == "__main__":
     main()
 ```
 
-This script now uses `urlparse` to extract the package name and repo path. The `extract_package_info` function has been updated to use this method. This approach should correctly handle the URL structure and extract the package name and repo path as per your requirements.
+This script now:
+1. Correctly extracts the package name without including the version.
+2. Sets the repo_path to be the same as the package name.
+3. Includes a 'csp' field in the output, currently set to "placeholder".
+
+To use this script:
+1. Replace `"your_artifactory_token_here"` with your actual JFrog Artifactory token.
+2. If needed, implement logic to determine the CSP for each artifact. You can do this by modifying the `process_repository` function where the "csp" field is currently set to "placeholder".
+3. Ensure you have the necessary permissions to access the repositories and artifacts in your JFrog Artifactory instance.
+
+This script should now produce output that matches your requirements, including the correct package name extraction and a placeholder for CSP information.
 
 ---
 Answer from Perplexity: pplx.ai/share
