@@ -1,4 +1,4 @@
-Here's the updated script with the requested changes:
+You're right, I apologize for that oversight. Here's the full script with the SSL warning suppression included:
 
 ```python
 import requests
@@ -6,15 +6,20 @@ import csv
 import warnings
 from datetime import datetime
 import logging
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
+# Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Suppress SSL verification warnings
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
-JFROG_URL = "https://your-artifactory-instance.jfrog.io/artifactory"
-API_KEY = "your-api-key-here"
-REPO_NAME = "your-docker-repo-name"
+# JFrog Artifactory configuration
+JFROG_URL = "https://your-artifactory-instance.jfrog.io/artifactory"  # Replace with your Artifactory URL
+API_KEY = "your-api-key-here"  # Replace with your API key
+REPO_NAME = "your-docker-repo-name"  # Replace with your Docker repository name
 
+# Headers for the API request
 headers = {
     'X-JFrog-Art-Api': API_KEY,
     'Accept': 'application/json',
@@ -106,26 +111,7 @@ if __name__ == '__main__':
     main()
 ```
 
-This updated script includes the following changes:
-
-1. "Docker Image Name" column has been renamed to "Resource Name".
-2. The "Resource Name" now only includes the last part of the image name (e.g., "frontend_angular-apm-dd").
-3. "Resource Type" is now set to "Container Image".
-4. "Unique ID" is now set to the same value as the "Digest".
-
-Remember to replace the placeholder values for JFROG_URL, API_KEY, and REPO_NAME with your actual Artifactory details before running the script.
-
-Citations:
-[1] https://developer.harness.io/docs/continuous-integration/use-ci/build-and-upload-artifacts/build-and-push/build-and-push-to-docker-jfrog/
-[2] https://docs.docker.com/scout/integrations/registry/artifactory/
-[3] https://stackoverflow.com/questions/44753357/how-to-get-the-dockertag-label-via-the-artifactory-api
-[4] https://jfrog.com/help/r/jfrog-artifactory-documentation/jfrog-container-registry
-[5] https://github.com/jfrog/Evidence-Examples
-[6] https://jfrog.com/help/r/jfrog-artifactory-documentation/docker-registry
-[7] https://jfrog.com/blog/manage-your-docker-builds-with-jfrog-cli-in-5-easy-steps/
-[8] https://jfrog.com/help/r/jfrog-rest-apis/artifactory-rest-apis
-[9] https://jfrog.com/help/r/jfrog-artifactory-documentation/docker-labels
-[10] https://jfrog.com/integrations/docker-registry/
+This script now includes the SSL warning suppression at the beginning. Make sure to replace the placeholder values for `JFROG_URL`, `API_KEY`, and `REPO_NAME` with your actual Artifactory details before running the script.
 
 ---
 Answer from Perplexity: pplx.ai/share
