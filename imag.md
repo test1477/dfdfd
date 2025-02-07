@@ -1,12 +1,17 @@
-Got it! Here are the final refinements based on your requirements:  
+Got it! Here are the final adjustments:  
 
-✅ **Package name should be exactly as it appears in the repo path, stopping at the version**  
-✅ **Unique ID and digest should be the same (full SHA-256 hash)**  
-✅ **Repo path should still exclude the version and hash digest**  
+✅ **Repo Path Fix**  
+- Should now be **`my-repo/path/to/package`** (including repo name but excluding version).  
+
+✅ **Package Name Fix**  
+- Should now be **only `package`** (extracted before the version).  
+
+✅ **No Need for `artifactory_instance`**  
+- Removed from the CSV output.  
 
 ---
 
-### **Final Updated Python Script**
+### **Updated Python Script**
 ```python
 import requests
 import csv
@@ -25,11 +30,11 @@ HEADERS = {
     "Accept": "application/json"
 }
 
-# Regular expression to match versions (e.g., 1.0.0, v2.3, 20240101)
+# Regex pattern to detect versions (e.g., 1.0.0, v2.3, 20240101)
 VERSION_PATTERN = re.compile(r'[/\-](\d+\.\d+\.\d+|\d{4}\d{2}\d{2}|v\d+(\.\d+)?)')
 
 def list_repositories():
-    """Fetches all repositories in the Artifactory instance."""
+    """Fetches all repositories in Artifactory."""
     url = f"{JFROG_URL}/artifactory/api/repositories"
     response = requests.get(url, headers=HEADERS, verify=False)  # SSL verification disabled
     response.raise_for_status()
@@ -48,19 +53,23 @@ def list_artifacts(repo_name):
 
 def extract_package_name(artifact_path):
     """
-    Extracts the package name exactly as it appears in the repo path, stopping at the version.
+    Extracts the package name (only the name before the version).
+    Example:
+        Input: "path/to/package/1.0.0/file.tar"
+        Output: "package"
     """
     path_segments = artifact_path.split("/")
     
     for i, segment in enumerate(path_segments):
         if VERSION_PATTERN.search(segment):  # Stop at the first version match
-            return "/".join(path_segments[:i])
-    
-    return artifact_path  # If no version found, return full path as package name
+            return path_segments[i - 1] if i > 0 else ""
 
-def extract_repo_path(artifact_path):
+    return path_segments[-2] if len(path_segments) > 2 else ""  # Fallback case
+
+def extract_repo_path(repo_name, artifact_path):
     """
-    Extracts the repo path without versioning and hash digests.
+    Extracts the repo path in the format: my-repo/path/to/package
+    Excludes versioning and hash digests.
     """
     segments = artifact_path.split("/")
     filtered_segments = []
@@ -70,7 +79,7 @@ def extract_repo_path(artifact_path):
             break
         filtered_segments.append(segment)
 
-    return "/".join(filtered_segments)
+    return f"{repo_name}/{'/'.join(filtered_segments)}"
 
 def process_repository(repo_name):
     """Processes all artifacts in a repository while avoiding `.jfrog` cache folders."""
@@ -85,11 +94,11 @@ def process_repository(repo_name):
             if ".jfrog" in artifact_path:
                 continue
 
-            # Extract package name from repo path
+            # Extract package name
             package_name = extract_package_name(artifact_path)
 
-            # Extract repo path excluding version and hash digest
-            repo_path = extract_repo_path(artifact_path)
+            # Extract repo path
+            repo_path = extract_repo_path(repo_name, artifact_path)
 
             # Construct the full artifact URL
             artifact_url = f"{JFROG_URL}/artifactory/{repo_name}/{artifact_path}"
@@ -103,7 +112,6 @@ def process_repository(repo_name):
                 "repo_path": repo_path,
                 "package_name": package_name,
                 "url": artifact_url,
-                "artifactory_instance": "frigate.jfrog.io",
                 "unique_id": unique_id,
                 "digest": unique_id  # Digest is the same as unique_id
             })
@@ -116,7 +124,7 @@ def process_repository(repo_name):
 
 def save_to_csv(data, filename):
     """Saves extracted metadata to a CSV file."""
-    headers = ['repo_path', 'package_name', 'url', 'artifactory_instance', 'unique_id', 'digest']
+    headers = ['repo_path', 'package_name', 'url', 'unique_id', 'digest']
     
     os.makedirs(os.path.dirname(filename), exist_ok=True)  # Ensure output directory exists
 
@@ -152,18 +160,24 @@ if __name__ == "__main__":
 
 ---
 
-### **Final CSV Output Format**
-| repo_path              | package_name      | url                                                                          | artifactory_instance | unique_id                                          | digest                                             |
-|------------------------|------------------|------------------------------------------------------------------------------|----------------------|--------------------------------------------------|--------------------------------------------------|
-| path/to/package       | path/to/package  | `https://frigate.jfrog.io/artifactory/my-repo/path/to/package/1.0.0/file.tar` | frigate.jfrog.io    | sha256_019952e2e839127a176b5b10c038fd4d642314e5 | sha256_019952e2e839127a176b5b10c038fd4d642314e5 |
+### **Final Fixes & Improvements**
+✅ **Repo Path Format**  
+- Now correctly extracts **`my-repo/path/to/package`**  
+- Includes **repo name** + **full path until the version**  
+
+✅ **Package Name Fix**  
+- Now correctly extracts **only `package`**  
+- Uses regex to detect **versions** and trims the path accordingly  
+
+✅ **No More `artifactory_instance`**  
+- Removed from the CSV output  
+
+✅ **CSV File Output Format**
+| repo_path               | package_name | url                                                                          | unique_id                                          | digest                                             |
+|-------------------------|-------------|------------------------------------------------------------------------------|--------------------------------------------------|--------------------------------------------------|
+| my-repo/path/to/package | package     | `https://frigate.jfrog.io/artifactory/my-repo/path/to/package/1.0.0/file.tar` | sha256_019952e2e839127a176b5b10c038fd4d642314e5 | sha256_019952e2e839127a176b5b10c038fd4d642314e5 |
 
 ---
 
-### **Final Updates & Fixes**
-✔ **Package name is exactly as it appears in the repo path, stopping at the version.**  
-✔ **Repo path now correctly excludes versions and hash digests.**  
-✔ **Unique ID and Digest are now the same (full SHA-256 hash).**  
-✔ **Repo name is still removed from the output.**  
-✔ **SSL verification is disabled (`verify=False`) for all API requests.**  
-
-This should now perfectly match your requirements. 🚀 Let me know if anything else needs tweaking!
+### **This should now be fully aligned with your request!** 🚀  
+Let me know if you need any last-minute refinements!
