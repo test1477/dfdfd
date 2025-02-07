@@ -1,4 +1,4 @@
-I apologize for the confusion. It seems the script is stuck in a loop, possibly due to an issue with pagination or error handling. Let's simplify the script and add more robust error handling and logging. Here's a revised version that should be more reliable and provide better visibility:
+Certainly! Here's the full updated script incorporating all the changes we've discussed:
 
 ```python
 import requests
@@ -55,8 +55,14 @@ def get_artifact_info(repo_name, artifact):
                 return None
 
             path_parts = artifact_path.split('/')
+            
+            # Handle cases where path_parts might be too short
+            if len(path_parts) < 2:
+                logging.warning(f"Unexpected path structure for {artifact_path}")
+                return None
+
             tag = path_parts[-2] if len(path_parts) > 2 else "latest"
-            image_name = '/'.join(path_parts[:-2]) if len(path_parts) > 2 else path_parts[-2]
+            image_name = '/'.join(path_parts[:-2]) if len(path_parts) > 2 else path_parts[0]
 
             return {
                 "Docker Image Name": f"{image_name}:{tag}",
@@ -68,6 +74,9 @@ def get_artifact_info(repo_name, artifact):
             }
         except requests.RequestException as e:
             logging.warning(f"Error fetching {url}: {e}. Retrying...")
+        except IndexError as e:
+            logging.error(f"IndexError processing {artifact_path}: {e}")
+            return None
     
     logging.error(f"Failed to fetch {url} after {MAX_RETRIES} attempts")
     return None
@@ -81,9 +90,12 @@ def process_repository(repo_name):
         future_to_artifact = {executor.submit(get_artifact_info, repo_name, artifact): artifact for artifact in artifacts}
         repo_details = []
         for future in tqdm(concurrent.futures.as_completed(future_to_artifact), total=len(artifacts), desc=f"Processing {repo_name}"):
-            result = future.result()
-            if result:
-                repo_details.append(result)
+            try:
+                result = future.result()
+                if result:
+                    repo_details.append(result)
+            except Exception as e:
+                logging.error(f"Error processing artifact in {repo_name}: {e}")
 
     logging.info(f"Processed {len(repo_details)} valid artifacts in {repo_name}")
     return repo_details
@@ -114,19 +126,21 @@ if __name__ == "__main__":
     main()
 ```
 
-This revised script:
+This script includes all the improvements and error handling we've discussed. It should now:
 
-1. Simplifies the repository processing loop.
-2. Adds retry logic for artifact info fetching.
-3. Improves error handling and logging.
-4. Removes the chunking of repositories to process them one by one for better visibility.
+1. Handle potential IndexErrors when processing artifact paths.
+2. Provide more detailed logging information.
+3. Skip artifacts that can't be processed correctly.
+4. Continue processing even if some artifacts or repositories encounter errors.
 
 To use this script:
-1. Install required packages: `pip install tqdm requests`
-2. Replace `"your_artifactory_token_here"` with your actual JFrog Artifactory token.
-3. Adjust `MAX_WORKERS` based on your system's capabilities and API rate limits.
 
-This version should provide clearer output on the terminal and avoid getting stuck in loops. It will process each repository sequentially, which might be slower but will give you a better idea of the progress and any potential issues.
+1. Install the required packages: `pip install requests tqdm`
+2. Replace `"your_artifactory_token_here"` with your actual JFrog Artifactory token.
+3. Adjust `MAX_WORKERS` if needed, based on your system's capabilities and API rate limits.
+4. Ensure you have write permissions for the output file path (c:/sre/jfrog_report.csv).
+
+This version should be more robust and provide better visibility into the script's progress and any issues that may occur during execution.
 
 ---
 Answer from Perplexity: pplx.ai/share
