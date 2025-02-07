@@ -1,26 +1,6 @@
-Certainly! Here's the full updated script incorporating all the changes we've discussed:
+I apologize for the confusion. Let's troubleshoot this step by step. We'll modify the script to provide more detailed logging and error handling to identify where the process is failing. Here's an updated version of the script with enhanced debugging:
 
 ```python
-"""
-JFrog Artifactory Docker Image Metadata Exporter
-
-This script retrieves metadata for all Docker images across all Docker repositories
-in a JFrog Artifactory instance. It generates a CSV report containing information
-about each image, including resource name, CSP placeholder, resource type, unique ID,
-digest, and repository path. The script excludes .jfrog cache folders and handles
-artifacts blocked by Xray policies.
-
-Author: [Your Name]
-Date: [Current Date]
-Version: 1.2
-
-Usage:
-1. Set the JFROG_URL and API_KEY variables with your Artifactory instance details.
-2. Run the script to generate a CSV report of all Docker images across all repositories.
-
-Output: A CSV file named 'Docker_Images_Report_[DATE].csv' in the same directory as the script.
-"""
-
 import requests
 import csv
 import warnings
@@ -29,7 +9,7 @@ import logging
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Suppress SSL verification warnings
 warnings.simplefilter('ignore', InsecureRequestWarning)
@@ -46,8 +26,11 @@ headers = {
 
 def make_request(url):
     try:
+        logging.debug(f"Making request to: {url}")
         response = requests.get(url, headers=headers, verify=False)
         response.raise_for_status()
+        logging.debug(f"Response status code: {response.status_code}")
+        logging.debug(f"Response content: {response.text[:200]}...")  # Log first 200 characters of response
         return response
     except requests.RequestException as e:
         logging.error(f"Request failed for URL {url}: {str(e)}")
@@ -104,17 +87,8 @@ def fetch_docker_manifest(repo_name, image_name, tag):
 def process_docker_repositories():
     all_image_details = []
     
-    # Debug: Print all repositories
-    all_repos = fetch_all_repositories()
-    print("All repository names:")
-    for repo in all_repos:
-        print(f"- {repo['key']} (Type: {repo.get('packageType', 'Unknown')})")
-
-    # Debug: Print Docker repositories
     docker_repos = fetch_docker_repositories()
-    print("Docker repository names:")
-    for repo in docker_repos:
-        print(f"- {repo}")
+    logging.info(f"Processing {len(docker_repos)} Docker repositories")
 
     for repo_name in docker_repos:
         logging.info(f"Processing repository: {repo_name}")
@@ -165,20 +139,15 @@ if __name__ == '__main__':
     main()
 ```
 
-This updated script includes all the modifications we've discussed:
-
-1. It fetches all repositories and filters for Docker repositories.
-2. It excludes .jfrog cache folders when processing Docker images.
-3. It handles artifacts blocked by Xray policies, logging warnings and skipping them.
-4. It includes debug print statements to show all repository names and their types, as well as the filtered Docker repository names.
+This updated script includes more detailed logging at the DEBUG level. It will log the URL of each request, the response status code, and the first 200 characters of each response. This should help identify where the script is failing or if it's not receiving the expected data from the Artifactory API.
 
 To use this script:
 
 1. Replace `"https://your-artifactory-instance.jfrog.io/artifactory"` with your actual JFrog Artifactory URL.
 2. Replace `"your-api-key-here"` with your actual API key.
-3. Run the script.
+3. Run the script and check the detailed log output.
 
-This script should now handle the issues you were facing, including excluding cache folders and dealing with blocked artifacts. It will provide a comprehensive report of all accessible Docker images in your Artifactory instance.
+If you're still getting an empty output, please run this script and provide the log output. This will help us identify exactly where the process is failing and why no Docker images are being found or processed.
 
 ---
 Answer from Perplexity: pplx.ai/share
