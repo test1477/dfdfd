@@ -1,10 +1,10 @@
-I understand now. You're looking for specific fields related to Docker images. Let's modify the script to extract and format the data as you've specified. Here's the updated script:
+I understand the issue now. It seems that the digest field is sometimes populated with file names like "main.json" or "manifest.json" instead of the expected SHA digest. Let's modify the script to handle this and ensure we're getting the correct SHA digest for Docker images. Here's an updated version of the script that addresses this issue:
 
 ```python
 import requests
 import csv
 import os
-import hashlib
+import json
 from urllib.parse import urlparse
 
 # Constants
@@ -36,17 +36,25 @@ def list_artifacts(repo_name):
         print(f"Error fetching artifacts for {repo_name}: {response.text}")
         return []
 
+def get_manifest_digest(repo_name, image_name, tag):
+    """Fetches the manifest digest for a Docker image."""
+    manifest_url = f"{ARTIFACTORY_API}/{repo_name}/{image_name}/{tag}/manifest.json"
+    response = requests.get(manifest_url, headers=HEADERS, verify=False)
+    if response.status_code == 200:
+        manifest_data = response.json()
+        return manifest_data.get("checksums", {}).get("sha256")
+    return None
+
 def extract_image_info(repo_name, artifact_path):
     """Extracts Docker image information from the artifact path."""
     path_parts = artifact_path.split('/')
     if len(path_parts) < 2:
-        return None, None, None
+        return None, None
 
     tag = path_parts[-2]  # Assuming the tag is always the second-to-last part
     image_name = '/'.join(path_parts[:-2])  # Everything before the tag
-    digest = path_parts[-1]  # The last part is usually the digest
 
-    return image_name, tag, digest
+    return image_name, tag
 
 def process_repository(repo_name):
     """Processes all artifacts in a repository."""
@@ -57,20 +65,24 @@ def process_repository(repo_name):
         for artifact in artifact_list:
             artifact_path = artifact.get("uri", "").lstrip("/")
 
-            # Skip .jfrog cache folder
-            if ".jfrog" in artifact_path:
+            # Skip .jfrog cache folder and non-manifest files
+            if ".jfrog" in artifact_path or not artifact_path.endswith("manifest.json"):
                 continue
 
-            image_name, tag, digest = extract_image_info(repo_name, artifact_path)
+            image_name, tag = extract_image_info(repo_name, artifact_path)
             if not image_name or not tag:
                 continue  # Skip if we couldn't extract the necessary information
+
+            digest = get_manifest_digest(repo_name, image_name, tag)
+            if not digest:
+                continue  # Skip if we couldn't get the digest
 
             # Store data
             repo_details.append({
                 "Docker Image Name": f"{image_name}:{tag}",
                 "Resource Type": "Docker Image",
-                "Unique ID": f"{repo_name}/{image_name}:{tag}",
-                "Digest": digest,
+                "Unique ID": f"sha256:{digest}",
+                "Digest": f"sha256:{digest}",
                 "Repo Path": f"{repo_name}/{image_name}",
                 "CSP": "placeholder"  # Add your logic to determine CSP here
             })
@@ -119,19 +131,12 @@ if __name__ == "__main__":
 
 This updated script:
 
-1. Extracts Docker image name, tag, and digest from the artifact path.
-2. Formats the data according to your specified structure.
-3. Includes all the fields you requested: Docker Image Name, Resource Type, Unique ID, Digest, and Repo Path.
-4. Adds a placeholder for CSP (Cloud Service Provider) which you can customize as needed.
-5. Saves the data to a CSV file with the specified headers.
+1. Focuses on processing manifest.json files, which contain the correct digest information for Docker images.
+2. Introduces a new function `get_manifest_digest` to fetch the SHA256 digest from the manifest file.
+3. Uses the SHA256 digest from the manifest for both the Unique ID and Digest fields.
+4. Skips artifacts that don't have a valid manifest or digest.
 
-To use this script:
-1. Replace `"your_artifactory_token_here"` with your actual JFrog Artifactory token.
-2. Implement logic to determine the CSP for each artifact if needed.
-3. Ensure you have the necessary permissions to access the repositories and artifacts in your JFrog Artifactory instance.
-4. Make sure the output directory (c:/sre/) exists or modify the path as needed.
-
-This script should now produce a CSV report that matches your specified format for Docker images in JFrog Artifactory.
+This approach should resolve the issue of incorrect digest values and ensure that you're getting the proper SHA256 digest for each Docker image. The Unique ID and Digest fields will now contain the actual SHA256 digest prefixed with "sha256:", as is standard for Docker image digests.
 
 ---
 Answer from Perplexity: pplx.ai/share
