@@ -1,118 +1,137 @@
-I apologize for the confusion. I'll update the script to use the correct column names and data structure you specified. Here's the revised version of the script:
+I understand now. You're looking for specific fields related to Docker images. Let's modify the script to extract and format the data as you've specified. Here's the updated script:
 
 ```python
 import requests
 import csv
-import warnings
-from datetime import datetime
-import logging
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
+import os
+import hashlib
+from urllib.parse import urlparse
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Constants
+JFROG_URL = "https://frigate.jfrog.io"
+ARTIFACTORY_API = f"{JFROG_URL}/artifactory/api/storage"
+ARTIFACTORY_TOKEN = "your_artifactory_token_here"
 
-# Suppress SSL verification warnings
-warnings.simplefilter('ignore', InsecureRequestWarning)
-
-# Hardcoded JFrog Artifactory configuration
-JFROG_URL = "https://your-artifactory-instance.jfrog.io/artifactory"
-API_KEY = "your-api-key-here"
-
-headers = {
-    'X-JFrog-Art-Api': API_KEY,
-    'Accept': 'application/json',
+# Headers for API authentication
+HEADERS = {
+    "Authorization": f"Bearer {ARTIFACTORY_TOKEN}",
+    "Accept": "application/json"
 }
 
-def fetch_repositories():
-    url = f"{JFROG_URL}/api/repositories"
-    try:
-        response = requests.get(url, headers=headers, verify=False)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        logging.error(f"Failed to fetch repositories: {e}")
-        return []
+def list_repositories():
+    """Fetches all repositories in Artifactory."""
+    url = f"{JFROG_URL}/artifactory/api/repositories"
+    response = requests.get(url, headers=HEADERS, verify=False)
+    response.raise_for_status()
+    return response.json()
 
 def list_artifacts(repo_name):
-    url = f"{JFROG_URL}/api/storage/{repo_name}?list&deep=1"
-    try:
-        response = requests.get(url, headers=headers, verify=False)
-        response.raise_for_status()
+    """Fetches all artifacts in a repository."""
+    url = f"{ARTIFACTORY_API}/{repo_name}?list&deep=1"
+    response = requests.get(url, headers=HEADERS, verify=False)
+
+    if response.status_code == 200:
         return response.json().get("files", [])
-    except requests.RequestException as e:
-        logging.error(f"Failed to list artifacts for {repo_name}: {e}")
+    else:
+        print(f"Error fetching artifacts for {repo_name}: {response.text}")
         return []
 
-def fetch_docker_repositories():
-    all_repos = fetch_repositories()
-    docker_repos = [repo['key'] for repo in all_repos if repo.get('packageType') == 'docker']
-    logging.info(f"Found {len(docker_repos)} Docker repositories")
-    return docker_repos
+def extract_image_info(repo_name, artifact_path):
+    """Extracts Docker image information from the artifact path."""
+    path_parts = artifact_path.split('/')
+    if len(path_parts) < 2:
+        return None, None, None
 
-def fetch_docker_manifest(repo_name, image_name, tag):
-    url = f"{JFROG_URL}/api/docker/{repo_name}/v2/{image_name}/manifests/{tag}"
+    tag = path_parts[-2]  # Assuming the tag is always the second-to-last part
+    image_name = '/'.join(path_parts[:-2])  # Everything before the tag
+    digest = path_parts[-1]  # The last part is usually the digest
+
+    return image_name, tag, digest
+
+def process_repository(repo_name):
+    """Processes all artifacts in a repository."""
     try:
-        response = requests.get(url, headers=headers, verify=False)
-        response.raise_for_status()
-        return response.headers.get("Docker-Content-Digest", "")
-    except requests.RequestException as e:
-        logging.error(f"Failed to fetch manifest for {repo_name}/{image_name}:{tag}: {e}")
-        return ""
+        artifact_list = list_artifacts(repo_name)
+        repo_details = []
 
-def process_docker_repositories():
-    all_image_details = []
-    docker_repos = fetch_docker_repositories()
-    
-    for repo_name in docker_repos:
-        logging.info(f"Processing repository: {repo_name}")
-        artifacts = list_artifacts(repo_name)
-        for artifact in artifacts:
-            if not artifact['uri'].startswith('/.jfrog'):
-                image_name = artifact['uri'].split(':')[0].strip('/')
-                tag = artifact['uri'].split(':')[-1] if ':' in artifact['uri'] else 'latest'
-                digest = fetch_docker_manifest(repo_name, image_name, tag)
-                all_image_details.append({
-                    "Docker Image Name": f"{image_name}:{tag}",
-                    "CSP Placeholder": "JFrog Artifactory",
-                    "Resource Type": "Docker Image",
-                    "Unique ID": f"{repo_name}/{image_name}:{tag}",
-                    "Digest": digest,
-                    "Repo Path": f"{repo_name}/{image_name}"
-                })
+        for artifact in artifact_list:
+            artifact_path = artifact.get("uri", "").lstrip("/")
 
-    logging.info(f"Total Docker images processed: {len(all_image_details)}")
-    return all_image_details
+            # Skip .jfrog cache folder
+            if ".jfrog" in artifact_path:
+                continue
+
+            image_name, tag, digest = extract_image_info(repo_name, artifact_path)
+            if not image_name or not tag:
+                continue  # Skip if we couldn't extract the necessary information
+
+            # Store data
+            repo_details.append({
+                "Docker Image Name": f"{image_name}:{tag}",
+                "Resource Type": "Docker Image",
+                "Unique ID": f"{repo_name}/{image_name}:{tag}",
+                "Digest": digest,
+                "Repo Path": f"{repo_name}/{image_name}",
+                "CSP": "placeholder"  # Add your logic to determine CSP here
+            })
+
+        return repo_details
+
+    except Exception as e:
+        print(f"Skipping repository {repo_name} due to error: {e}")
+        return []
 
 def save_to_csv(data, filename):
-    headers = ['Docker Image Name', 'CSP Placeholder', 'Resource Type', 'Unique ID', 'Digest', 'Repo Path']
+    """Saves extracted metadata to a CSV file."""
+    headers = ['Docker Image Name', 'Resource Type', 'Unique ID', 'Digest', 'Repo Path', 'CSP']
     
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+
     with open(filename, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=headers)
         writer.writeheader()
         writer.writerows(data)
     
-    logging.info(f"Data has been written to {filename}")
+    print(f"Data has been written to {filename}")
 
 def main():
-    logging.info("Starting Docker image metadata retrieval for all repositories")
-    all_image_details = process_docker_repositories()
+    """Main function to process repositories and generate the CSV report."""
+    repositories = list_repositories()
+    all_data = []
 
-    if not all_image_details:
-        logging.warning("No Docker image details were retrieved. The output file will be empty.")
+    for repo in repositories:
+        repo_name = repo.get("key", "")
+        package_type = repo.get("packageType", "")
 
-    current_date = datetime.now().strftime('%Y-%m-%d')
-    output_file = f"Docker_Images_Report_{current_date}.csv"
-    save_to_csv(all_image_details, output_file)
+        # Process only Docker repositories
+        if package_type == "Docker":
+            print(f"Processing repository: {repo_name}")
+            repo_data = process_repository(repo_name)
+            all_data.extend(repo_data)
 
-    logging.info("Script execution completed")
+    # Save data to CSV
+    save_to_csv(all_data, "c:/sre/jfrog_report.csv")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+    requests.packages.urllib3.disable_warnings()
     main()
 ```
 
-This script now uses the correct column names and data structure you specified. It fetches Docker repositories, lists artifacts in each repository, and then processes these artifacts to extract Docker image information. The script also fetches the manifest for each image to get the digest.
+This updated script:
 
-Remember to replace the `JFROG_URL` and `API_KEY` with your actual Artifactory URL and API key before running the script.
+1. Extracts Docker image name, tag, and digest from the artifact path.
+2. Formats the data according to your specified structure.
+3. Includes all the fields you requested: Docker Image Name, Resource Type, Unique ID, Digest, and Repo Path.
+4. Adds a placeholder for CSP (Cloud Service Provider) which you can customize as needed.
+5. Saves the data to a CSV file with the specified headers.
+
+To use this script:
+1. Replace `"your_artifactory_token_here"` with your actual JFrog Artifactory token.
+2. Implement logic to determine the CSP for each artifact if needed.
+3. Ensure you have the necessary permissions to access the repositories and artifacts in your JFrog Artifactory instance.
+4. Make sure the output directory (c:/sre/) exists or modify the path as needed.
+
+This script should now produce a CSV report that matches your specified format for Docker images in JFrog Artifactory.
 
 ---
 Answer from Perplexity: pplx.ai/share
