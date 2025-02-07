@@ -1,4 +1,4 @@
-Certainly! Here's the full script with the updated `extract_package_info` function and a placeholder for CSP (Cloud Service Provider). I've added a 'csp' field to the output, which you can populate as needed:
+Certainly! Here's the full, final script incorporating all the changes we've discussed:
 
 ```python
 import requests
@@ -44,9 +44,11 @@ def extract_package_info(url):
     # Find the index of the first segment that looks like a version number
     version_index = next((i for i, segment in enumerate(path_segments) if re.match(r'\d+(\.\d+)*', segment)), len(path_segments))
     
-    # Package name is everything up to but not including the version
-    package_name = "/".join(path_segments[:version_index])
+    # Repo path is everything up to but not including the version
     repo_path = "/".join(path_segments[:version_index])
+    
+    # Package name is the last part of the repo_path
+    package_name = path_segments[version_index - 1] if version_index > 0 else ""
     
     return package_name, repo_path
 
@@ -126,16 +128,19 @@ if __name__ == "__main__":
 ```
 
 This script now:
-1. Correctly extracts the package name without including the version.
-2. Sets the repo_path to be the same as the package name.
+1. Correctly extracts the package name as the last part of the repo path.
+2. Sets the repo_path to everything up to but not including the version.
 3. Includes a 'csp' field in the output, currently set to "placeholder".
+4. Processes only Docker repositories.
+5. Generates a CSV report with all the required fields.
 
 To use this script:
 1. Replace `"your_artifactory_token_here"` with your actual JFrog Artifactory token.
-2. If needed, implement logic to determine the CSP for each artifact. You can do this by modifying the `process_repository` function where the "csp" field is currently set to "placeholder".
+2. Implement logic to determine the CSP for each artifact if needed. You can do this by modifying the `process_repository` function where the "csp" field is currently set to "placeholder".
 3. Ensure you have the necessary permissions to access the repositories and artifacts in your JFrog Artifactory instance.
+4. Make sure the output directory (c:/sre/) exists or modify the path as needed.
 
-This script should now produce output that matches your requirements, including the correct package name extraction and a placeholder for CSP information.
+This script should now produce a CSV report that matches your requirements, with correct package name extraction, repo path, and placeholders for CSP information.
 
 ---
 Answer from Perplexity: pplx.ai/share
