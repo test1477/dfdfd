@@ -1,10 +1,10 @@
-I understand the issue now. It seems that the digest field is sometimes populated with file names like "main.json" or "manifest.json" instead of the expected SHA digest. Let's modify the script to handle this and ensure we're getting the correct SHA digest for Docker images. Here's an updated version of the script that addresses this issue:
+I apologize for the misunderstanding. You're right, we should process all artifacts, not just manifest.json files. Let's modify the script to handle all artifacts while still attempting to get the correct digest. Here's an updated version that should work for all artifacts:
 
 ```python
 import requests
 import csv
 import os
-import json
+import hashlib
 from urllib.parse import urlparse
 
 # Constants
@@ -36,25 +36,26 @@ def list_artifacts(repo_name):
         print(f"Error fetching artifacts for {repo_name}: {response.text}")
         return []
 
-def get_manifest_digest(repo_name, image_name, tag):
-    """Fetches the manifest digest for a Docker image."""
-    manifest_url = f"{ARTIFACTORY_API}/{repo_name}/{image_name}/{tag}/manifest.json"
-    response = requests.get(manifest_url, headers=HEADERS, verify=False)
+def get_artifact_digest(repo_name, artifact_path):
+    """Fetches the digest for an artifact."""
+    url = f"{ARTIFACTORY_API}/{repo_name}/{artifact_path}"
+    response = requests.get(url, headers=HEADERS, verify=False)
     if response.status_code == 200:
-        manifest_data = response.json()
-        return manifest_data.get("checksums", {}).get("sha256")
+        checksums = response.json().get("checksums", {})
+        return checksums.get("sha256") or checksums.get("sha1") or checksums.get("md5")
     return None
 
 def extract_image_info(repo_name, artifact_path):
     """Extracts Docker image information from the artifact path."""
     path_parts = artifact_path.split('/')
     if len(path_parts) < 2:
-        return None, None
+        return None, None, None
 
-    tag = path_parts[-2]  # Assuming the tag is always the second-to-last part
-    image_name = '/'.join(path_parts[:-2])  # Everything before the tag
+    file_name = path_parts[-1]
+    tag = path_parts[-2] if len(path_parts) > 2 else "latest"
+    image_name = '/'.join(path_parts[:-2]) if len(path_parts) > 2 else path_parts[-2]
 
-    return image_name, tag
+    return image_name, tag, file_name
 
 def process_repository(repo_name):
     """Processes all artifacts in a repository."""
@@ -65,15 +66,15 @@ def process_repository(repo_name):
         for artifact in artifact_list:
             artifact_path = artifact.get("uri", "").lstrip("/")
 
-            # Skip .jfrog cache folder and non-manifest files
-            if ".jfrog" in artifact_path or not artifact_path.endswith("manifest.json"):
+            # Skip .jfrog cache folder
+            if ".jfrog" in artifact_path:
                 continue
 
-            image_name, tag = extract_image_info(repo_name, artifact_path)
-            if not image_name or not tag:
+            image_name, tag, file_name = extract_image_info(repo_name, artifact_path)
+            if not image_name:
                 continue  # Skip if we couldn't extract the necessary information
 
-            digest = get_manifest_digest(repo_name, image_name, tag)
+            digest = get_artifact_digest(repo_name, artifact_path)
             if not digest:
                 continue  # Skip if we couldn't get the digest
 
@@ -131,12 +132,13 @@ if __name__ == "__main__":
 
 This updated script:
 
-1. Focuses on processing manifest.json files, which contain the correct digest information for Docker images.
-2. Introduces a new function `get_manifest_digest` to fetch the SHA256 digest from the manifest file.
-3. Uses the SHA256 digest from the manifest for both the Unique ID and Digest fields.
-4. Skips artifacts that don't have a valid manifest or digest.
+1. Processes all artifacts in Docker repositories, not just manifest.json files.
+2. Attempts to get the digest (SHA256, SHA1, or MD5, in that order of preference) for each artifact.
+3. Extracts image name and tag information from the artifact path.
+4. Uses the artifact's digest for both the Unique ID and Digest fields.
+5. Skips artifacts that don't have a valid digest.
 
-This approach should resolve the issue of incorrect digest values and ensure that you're getting the proper SHA256 digest for each Docker image. The Unique ID and Digest fields will now contain the actual SHA256 digest prefixed with "sha256:", as is standard for Docker image digests.
+This approach should provide a comprehensive list of all Docker artifacts in your JFrog Artifactory, including their correct digests. The script will attempt to use SHA256 digests when available, falling back to SHA1 or MD5 if necessary.
 
 ---
 Answer from Perplexity: pplx.ai/share
