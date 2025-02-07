@@ -1,11 +1,11 @@
-I apologize for the confusion. I understand now that you want the package name to be just the package itself, without the path, and the repo_path should be the path up to the package. Let's modify the script to achieve this. Here's the updated version:
+Certainly! I understand you want to use `urlparse` to extract the package name and repo path. Here's the updated script incorporating this approach:
 
 ```python
 import requests
 import csv
 import os
 import hashlib
-import re
+from urllib.parse import urlparse
 
 # Constants
 JFROG_URL = "https://frigate.jfrog.io"
@@ -17,9 +17,6 @@ HEADERS = {
     "Authorization": f"Bearer {ARTIFACTORY_TOKEN}",
     "Accept": "application/json"
 }
-
-# Regex pattern to detect versions (e.g., 1.0.0, v2.3, 20240101)
-VERSION_PATTERN = re.compile(r'(\d+\.\d+\.\d+|\d{4}\d{2}\d{2}|v\d+(\.\d+)?)')
 
 def list_repositories():
     """Fetches all repositories in Artifactory."""
@@ -39,19 +36,19 @@ def list_artifacts(repo_name):
         print(f"Error fetching artifacts for {repo_name}: {response.text}")
         return []
 
-def extract_package_info(artifact_path):
+def extract_package_info(url):
     """
-    Extracts the package name and repo path from the artifact path.
-    The package name is the last part before the version.
-    The repo path is everything up to and including the package name.
+    Extracts the package name and repo path from the URL.
+    The package name is the second-to-last segment.
+    The repo path is everything up to but not including the package name and version.
     """
-    path_parts = artifact_path.split('/')
-    for i, part in enumerate(path_parts):
-        if VERSION_PATTERN.match(part):
-            package_name = path_parts[i-1] if i > 0 else ""
-            repo_path = '/'.join(path_parts[:i])
-            return package_name, repo_path
-    return "", artifact_path  # If no version found, return empty package name and full path
+    parsed_url = urlparse(url)
+    path_segments = parsed_url.path.strip("/").split("/")
+    
+    package_name = path_segments[-2] if len(path_segments) > 2 else ""
+    repo_path = "/".join(path_segments[:-2])
+    
+    return package_name, repo_path
 
 def process_repository(repo_name):
     """Processes all artifacts in a repository."""
@@ -66,11 +63,11 @@ def process_repository(repo_name):
             if ".jfrog" in artifact_path:
                 continue
 
-            # Extract package name and repo_path
-            package_name, repo_path = extract_package_info(artifact_path)
-
             # Construct the full artifact URL
             artifact_url = f"{JFROG_URL}/artifactory/{repo_name}/{artifact_path}"
+
+            # Extract package name and repo_path
+            package_name, repo_path = extract_package_info(artifact_url)
 
             # Generate unique ID using SHA-256 hash
             sha256_hash = hashlib.sha256(artifact_url.encode()).hexdigest()
@@ -127,20 +124,7 @@ if __name__ == "__main__":
     main()
 ```
 
-This updated script:
-
-1. Extracts the `package_name` as just the package itself (the last part before the version).
-2. Sets the `repo_path` as the path up to and including the package name.
-3. Keeps the full artifact path in the URL.
-4. Generates the `unique_id` and `digest` as before.
-
-This should produce output matching your requirements:
-```
-repo_path           package_name    url                                                                          unique_id       digest
-path/to/package     package         https://frigate.jfrog.io/artifactory/my-repo/path/to/package/1.0.0/file.tar   sha256_[hash]   sha256_[hash]
-```
-
-Make sure to replace `"your_artifactory_token_here"` with your actual JFrog Artifactory token before running the script.
+This script now uses `urlparse` to extract the package name and repo path. The `extract_package_info` function has been updated to use this method. This approach should correctly handle the URL structure and extract the package name and repo path as per your requirements.
 
 ---
 Answer from Perplexity: pplx.ai/share
