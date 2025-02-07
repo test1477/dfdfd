@@ -1,4 +1,4 @@
-Certainly! Here's the full script with the modifications to list all repositories and filter for Docker repositories:
+Certainly! Here's the full updated script incorporating all the changes we've discussed:
 
 ```python
 """
@@ -7,11 +7,12 @@ JFrog Artifactory Docker Image Metadata Exporter
 This script retrieves metadata for all Docker images across all Docker repositories
 in a JFrog Artifactory instance. It generates a CSV report containing information
 about each image, including resource name, CSP placeholder, resource type, unique ID,
-digest, and repository path.
+digest, and repository path. The script excludes .jfrog cache folders and handles
+artifacts blocked by Xray policies.
 
 Author: [Your Name]
 Date: [Current Date]
-Version: 1.1
+Version: 1.2
 
 Usage:
 1. Set the JFROG_URL and API_KEY variables with your Artifactory instance details.
@@ -74,8 +75,9 @@ def fetch_docker_images(repo_name):
     response = make_request(url)
     if response:
         images = response.json().get("repositories", [])
-        logging.info(f"Found {len(images)} images in repository {repo_name}")
-        return images
+        filtered_images = [img for img in images if not img.startswith('.jfrog')]
+        logging.info(f"Found {len(filtered_images)} images in repository {repo_name}")
+        return filtered_images
     return []
 
 def fetch_docker_tags(repo_name, image_name):
@@ -94,6 +96,9 @@ def fetch_docker_manifest(repo_name, image_name, tag):
         digest = response.headers.get("Docker-Content-Digest", "")
         logging.info(f"Retrieved digest for {image_name}:{tag} in {repo_name}")
         return digest
+    elif response and response.status_code == 403:
+        logging.warning(f"Download blocked for {image_name}:{tag} in {repo_name} due to Xray policy")
+        return "BLOCKED"
     return ""
 
 def process_docker_repositories():
@@ -118,14 +123,17 @@ def process_docker_repositories():
             tags = fetch_docker_tags(repo_name, image)
             for tag in tags:
                 digest = fetch_docker_manifest(repo_name, image, tag)
-                all_image_details.append({
-                    "Resource Name": image.split('/')[-1],
-                    "CSP Placeholder": "JFrog Artifactory",
-                    "Resource Type": "Container Image",
-                    "Unique ID": digest,
-                    "Digest": digest,
-                    "Repo Path": f"{repo_name}/{image}"
-                })
+                if digest != "BLOCKED":
+                    all_image_details.append({
+                        "Resource Name": image.split('/')[-1],
+                        "CSP Placeholder": "JFrog Artifactory",
+                        "Resource Type": "Container Image",
+                        "Unique ID": digest,
+                        "Digest": digest,
+                        "Repo Path": f"{repo_name}/{image}"
+                    })
+                else:
+                    logging.warning(f"Skipping blocked artifact: {repo_name}/{image}:{tag}")
 
     logging.info(f"Total Docker images processed: {len(all_image_details)}")
     return all_image_details
@@ -157,11 +165,12 @@ if __name__ == '__main__':
     main()
 ```
 
-This script now includes:
+This updated script includes all the modifications we've discussed:
 
-1. A function to fetch all repositories (`fetch_all_repositories`).
-2. A modified `fetch_docker_repositories` function that filters for Docker repositories.
-3. Debug print statements to show all repository names and their types, as well as the filtered Docker repository names.
+1. It fetches all repositories and filters for Docker repositories.
+2. It excludes .jfrog cache folders when processing Docker images.
+3. It handles artifacts blocked by Xray policies, logging warnings and skipping them.
+4. It includes debug print statements to show all repository names and their types, as well as the filtered Docker repository names.
 
 To use this script:
 
@@ -169,7 +178,7 @@ To use this script:
 2. Replace `"your-api-key-here"` with your actual API key.
 3. Run the script.
 
-This should help identify if there are any Docker repositories in your Artifactory instance and provide more information about all available repositories. If you still don't see any Docker repositories, you may need to check your Artifactory configuration or consult with your Artifactory administrator.
+This script should now handle the issues you were facing, including excluding cache folders and dealing with blocked artifacts. It will provide a comprehensive report of all accessible Docker images in your Artifactory instance.
 
 ---
 Answer from Perplexity: pplx.ai/share
