@@ -1,8 +1,10 @@
-Here’s the full updated Python script that fetches artifact details from JFrog Artifactory and generates a CSV report, including **unique ID** (SHA-256 hash of artifact URL) and **digest** (SHA-256 from API response).  
+To disable SSL verification in the script, update the `requests.get()` calls by adding `verify=False`.  
+
+Here's the modified script with **SSL verification disabled**:  
 
 ---
 
-### **Full Script**
+### **Updated Script with `verify=False`**
 ```python
 import requests
 import csv
@@ -25,7 +27,7 @@ def list_repositories():
     Fetches all repositories in the Artifactory instance.
     """
     url = f"{JFROG_URL}/artifactory/api/repositories"
-    response = requests.get(url, headers=HEADERS)
+    response = requests.get(url, headers=HEADERS, verify=False)  # SSL verification disabled
     response.raise_for_status()
     return response.json()
 
@@ -34,8 +36,8 @@ def list_artifacts(repo_name):
     Fetches all artifacts in a repository.
     """
     url = f"{ARTIFACTORY_API}/{repo_name}?list&deep=1"
-    response = requests.get(url, headers=HEADERS)
-    
+    response = requests.get(url, headers=HEADERS, verify=False)  # SSL verification disabled
+
     if response.status_code == 200:
         return response.json().get("files", [])
     else:
@@ -141,40 +143,15 @@ def main():
     save_to_csv(all_data, "c:/sre/jfrog_report.csv")
 
 if __name__ == "__main__":
+    requests.packages.urllib3.disable_warnings()  # Suppress SSL warnings
     main()
 ```
 
 ---
 
-### **How This Works**
-1. **Fetches all repositories** in JFrog Artifactory (`list_repositories`).
-2. **Filters only Docker repositories** before processing.
-3. **Retrieves artifacts** from each repository (`list_artifacts`).
-4. **Extracts metadata**, including:
-   - `repo_name`
-   - `package_type`
-   - `package_name`
-   - `version`
-   - `url`
-   - `created_date`
-   - `unique_id` (SHA-256 hash of URL)
-   - `digest` (SHA-256 from API response)
-5. **Saves all data into a CSV file** (`c:/sre/jfrog_report.csv`).
+### **Key Updates**
+✅ **Added `verify=False`** to all `requests.get()` calls to **disable SSL verification**.  
+✅ **Suppressed SSL warnings** using `requests.packages.urllib3.disable_warnings()`.  
+✅ **Everything else remains the same**, ensuring smooth data retrieval from JFrog Artifactory.  
 
----
-
-### **Expected Output (CSV Example)**
-| repo_name     | package_type | package_name | version | url | created_date | unique_id | digest |
-|--------------|-------------|-------------|---------|----|-------------|------------|--------|
-| my-docker-repo | Docker | my-app | 1.0.0 | `https://frigate.jfrog.io/artifactory/my-docker-repo/my-app/1.0.0/image.tar` | 2024-08-21T12:34:56Z | `c3fcd3d76192e4007dfb496cca67e13b1dd4f503` | `abc123...` |
-| my-docker-repo | Docker | my-app | 1.1.0 | `https://frigate.jfrog.io/artifactory/my-docker-repo/my-app/1.1.0/image.tar` | 2024-08-22T14:00:21Z | `f8e3c2b7d3...` | `def456...` |
-
----
-
-### **Key Enhancements**
-✅ **Unique ID**: Generated using SHA-256 hash of the artifact URL.  
-✅ **Digest**: Extracted from JFrog API (`artifact.get("sha256")`).  
-✅ **Filters only Docker repositories** before processing.  
-✅ **CSV output includes all relevant metadata** for tracking artifacts.  
-
-Let me know if you need any modifications! 🚀
+Let me know if you need any further modifications! 🚀
