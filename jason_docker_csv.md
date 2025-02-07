@@ -1,4 +1,4 @@
-Certainly! Let's modify the script to focus on a single Docker repository. We'll hardcode the repository name and simplify the script to retrieve images and tags from just that repository. Here's the updated script:
+Here's the updated script with the requested changes:
 
 ```python
 import requests
@@ -7,19 +7,14 @@ import warnings
 from datetime import datetime
 import logging
 
-# Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Suppress SSL verification warnings
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
-# JFrog Artifactory configuration
-JFROG_URL = "https://your-artifactory-instance.jfrog.io/artifactory"  # Replace with your Artifactory URL
-API_KEY = "your-api-key-here"  # Replace with your API key
-REPO_NAME = "your-docker-repo-name"  # Replace with your Docker repository name
+JFROG_URL = "https://your-artifactory-instance.jfrog.io/artifactory"
+API_KEY = "your-api-key-here"
+REPO_NAME = "your-docker-repo-name"
 
-# Headers for the API request
 headers = {
     'X-JFrog-Art-Api': API_KEY,
     'Accept': 'application/json',
@@ -73,10 +68,10 @@ def process_docker_images():
         for tag in tags:
             digest = fetch_docker_manifest(image, tag)
             all_image_details.append({
-                "Docker Image Name": f"{image}:{tag}",
+                "Resource Name": image.split('/')[-1],
                 "CSP Placeholder": "JFrog Artifactory",
-                "Resource Type": "Docker Image",
-                "Unique ID": f"{REPO_NAME}/{image}:{tag}",
+                "Resource Type": "Container Image",
+                "Unique ID": digest,
                 "Digest": digest,
                 "Repo Path": f"{REPO_NAME}/{image}"
             })
@@ -85,7 +80,7 @@ def process_docker_images():
     return all_image_details
 
 def save_to_csv(data, filename):
-    headers = ['Docker Image Name', 'CSP Placeholder', 'Resource Type', 'Unique ID', 'Digest', 'Repo Path']
+    headers = ['Resource Name', 'CSP Placeholder', 'Resource Type', 'Unique ID', 'Digest', 'Repo Path']
     
     with open(filename, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=headers)
@@ -101,7 +96,6 @@ def main():
     if not all_image_details:
         logging.warning("No Docker image details were retrieved. The output file will be empty.")
 
-    # Save all details to CSV with a dynamic file name
     current_date = datetime.now().strftime('%Y-%m-%d')
     output_file = f"Docker_Images_Report_{REPO_NAME}_{current_date}.csv"
     save_to_csv(all_image_details, output_file)
@@ -112,14 +106,26 @@ if __name__ == '__main__':
     main()
 ```
 
-To use this script:
+This updated script includes the following changes:
 
-1. Replace `"https://your-artifactory-instance.jfrog.io/artifactory"` with your actual JFrog Artifactory URL.
-2. Replace `"your-api-key-here"` with your actual API key.
-3. Replace `"your-docker-repo-name"` with the name of the specific Docker repository you want to process.
-4. Run the script and check the console output for detailed logging information.
+1. "Docker Image Name" column has been renamed to "Resource Name".
+2. The "Resource Name" now only includes the last part of the image name (e.g., "frontend_angular-apm-dd").
+3. "Resource Type" is now set to "Container Image".
+4. "Unique ID" is now set to the same value as the "Digest".
 
-This script focuses on a single Docker repository, which should simplify the process and help identify any specific issues. If you're still encountering problems, please run the script and share the log output. This will provide more detailed information about where the process might be failing.
+Remember to replace the placeholder values for JFROG_URL, API_KEY, and REPO_NAME with your actual Artifactory details before running the script.
+
+Citations:
+[1] https://developer.harness.io/docs/continuous-integration/use-ci/build-and-upload-artifacts/build-and-push/build-and-push-to-docker-jfrog/
+[2] https://docs.docker.com/scout/integrations/registry/artifactory/
+[3] https://stackoverflow.com/questions/44753357/how-to-get-the-dockertag-label-via-the-artifactory-api
+[4] https://jfrog.com/help/r/jfrog-artifactory-documentation/jfrog-container-registry
+[5] https://github.com/jfrog/Evidence-Examples
+[6] https://jfrog.com/help/r/jfrog-artifactory-documentation/docker-registry
+[7] https://jfrog.com/blog/manage-your-docker-builds-with-jfrog-cli-in-5-easy-steps/
+[8] https://jfrog.com/help/r/jfrog-rest-apis/artifactory-rest-apis
+[9] https://jfrog.com/help/r/jfrog-artifactory-documentation/docker-labels
+[10] https://jfrog.com/integrations/docker-registry/
 
 ---
 Answer from Perplexity: pplx.ai/share
