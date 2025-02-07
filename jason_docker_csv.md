@@ -1,40 +1,22 @@
-Certainly! We can adapt the approach from the script you provided to retrieve Docker image metadata. Here's an updated version of the script that combines the best aspects of both approaches:
+Yes, we can modify the script to hardcode the JFrog URL and API key instead of using command-line arguments and environment variables. Here's an updated version of the script with hardcoded values:
 
 ```python
-import os
 import requests
 import csv
 import warnings
-from urllib.parse import urljoin
 from datetime import datetime
-import argparse
 import logging
 
-# Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Suppress SSL verification warnings
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
-# Parse command-line arguments
-parser = argparse.ArgumentParser(description="Generate JFrog Docker image reports.")
-parser.add_argument('--org', required=True, help="The organization name (e.g., 'ev' or 'ppa').")
-parser.add_argument('--jfrog-url', required=True, help="The JFrog Artifactory URL.")
-parser.add_argument('--output', required=True, help="The output directory for the generated report.")
-args = parser.parse_args()
+# Hardcoded JFrog Artifactory configuration
+JFROG_URL = "https://your-artifactory-instance.jfrog.io/artifactory"
+API_KEY = "your-api-key-here"
 
-# Get JFrog Artifactory instance details
-JFROG_URL = args.jfrog_url.rstrip('/')
-ARTIFACTORY_TOKEN = os.getenv(f'JFROG_API_KEY_{args.org.upper()}')
-
-if not ARTIFACTORY_TOKEN:
-    logging.error(f"Error: JFROG_API_KEY_{args.org.upper()} is not set in environment variables.")
-    exit(1)
-
-# Headers for the API request
 headers = {
-    'Authorization': f'Bearer {ARTIFACTORY_TOKEN}',
+    'X-JFrog-Art-Api': API_KEY,
     'Accept': 'application/json',
 }
 
@@ -107,11 +89,11 @@ def process_docker_repositories():
                         "package_type": "Docker",
                         "package_name": image,
                         "version": tag,
-                        "url": f"{JFROG_URL}/artifactory/{repo_name}/{image}:{tag}",
+                        "url": f"{JFROG_URL}/{repo_name}/{image}:{tag}",
                         "created_date": created_date,
                         "license": "",
                         "secarch": "",
-                        "artifactory_instance": args.jfrog_url
+                        "artifactory_instance": JFROG_URL
                     })
                 else:
                     logging.warning(f"Skipping blocked artifact: {repo_name}/{image}:{tag}")
@@ -122,8 +104,6 @@ def process_docker_repositories():
 def save_to_csv(data, filename):
     headers = ['repo_name', 'package_type', 'package_name', 'version', 'url', 'created_date', 'license', 'secarch', 'artifactory_instance']
     
-    os.makedirs(os.path.dirname(filename), exist_ok=True)  # Ensure output directory exists
-
     with open(filename, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=headers)
         writer.writeheader()
@@ -139,7 +119,7 @@ def main():
         logging.warning("No Docker image details were retrieved. The output file will be empty.")
 
     current_date = datetime.now().strftime('%Y-%m-%d')
-    output_file = os.path.join(args.output, f"EV_EOL_{current_date}_docker.csv")
+    output_file = f"Docker_Images_Report_{current_date}.csv"
     save_to_csv(all_image_details, output_file)
 
     logging.info("Script execution completed")
@@ -148,25 +128,21 @@ if __name__ == '__main__':
     main()
 ```
 
-This updated script combines the command-line argument parsing and environment variable usage from your provided script with the Docker-specific repository and image fetching from the previous script. It includes the following features:
-
-1. Uses command-line arguments for organization, JFrog URL, and output directory.
-2. Retrieves the API key from an environment variable based on the organization.
-3. Fetches only Docker repositories.
-4. Processes Docker images and tags within each repository.
-5. Excludes .jfrog cache folders.
-6. Handles artifacts blocked by Xray policies.
-7. Generates a CSV report with the specified columns.
-
 To use this script:
 
-1. Set the environment variable for your API key: `export JFROG_API_KEY_YOUR_ORG=your_api_key_here`
-2. Run the script with the required arguments:
-   ```
-   python script_name.py --org YOUR_ORG --jfrog-url https://your-artifactory-url.jfrog.io --output /path/to/output/directory
-   ```
+1. Replace "https://your-artifactory-instance.jfrog.io/artifactory" with your actual JFrog Artifactory URL.
+2. Replace "your-api-key-here" with your actual API key.
+3. Run the script to generate the CSV report of Docker images in your Artifactory instance[1][3].
 
-This script should provide a comprehensive report of Docker images in your Artifactory instance while using the approach and structure from your provided script.
+Citations:
+[1] https://developer.harness.io/docs/continuous-integration/use-ci/build-and-upload-artifacts/build-and-push/build-and-push-to-docker-jfrog/
+[2] https://stackoverflow.com/questions/44753357/how-to-get-the-dockertag-label-via-the-artifactory-api
+[3] https://jfrog.com/blog/manage-your-docker-builds-with-jfrog-cli-in-5-easy-steps/
+[4] https://jfrog.com/help/r/jfrog-artifactory-documentation/docker-labels
+[5] https://docs.docker.com/scout/integrations/registry/artifactory/
+[6] https://stackoverflow.com/questions/75755878/push-a-docker-image-with-curl-or-jfrog-cli
+[7] https://jfrog.com/integrations/docker-registry/
+[8] https://jfrog.com/help/r/jfrog-artifactory-documentation/the-repository-path-method-for-docker
 
 ---
 Answer from Perplexity: pplx.ai/share
