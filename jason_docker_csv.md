@@ -1,4 +1,4 @@
-Certainly! I'll modify the script to work at the organization level, fetching all Docker repositories and then processing each of them. I'll also add a description about the script at the beginning. Here's the updated version:
+Certainly! Here's the full script with the modifications to list all repositories and filter for Docker repositories:
 
 ```python
 """
@@ -11,7 +11,7 @@ digest, and repository path.
 
 Author: [Your Name]
 Date: [Current Date]
-Version: 1.0
+Version: 1.1
 
 Usage:
 1. Set the JFROG_URL and API_KEY variables with your Artifactory instance details.
@@ -54,14 +54,20 @@ def make_request(url):
             logging.error(f"Response content: {e.response.text}")
         return None
 
-def fetch_docker_repositories():
-    url = f"{JFROG_URL}/api/repositories?type=docker"
+def fetch_all_repositories():
+    url = f"{JFROG_URL}/api/repositories"
     response = make_request(url)
     if response:
         repos = response.json()
-        logging.info(f"Found {len(repos)} Docker repositories")
-        return [repo['key'] for repo in repos]
+        logging.info(f"Found {len(repos)} total repositories")
+        return repos
     return []
+
+def fetch_docker_repositories():
+    all_repos = fetch_all_repositories()
+    docker_repos = [repo['key'] for repo in all_repos if repo.get('packageType') == 'docker']
+    logging.info(f"Found {len(docker_repos)} Docker repositories")
+    return docker_repos
 
 def fetch_docker_images(repo_name):
     url = f"{JFROG_URL}/api/docker/{repo_name}/v2/_catalog"
@@ -92,9 +98,20 @@ def fetch_docker_manifest(repo_name, image_name, tag):
 
 def process_docker_repositories():
     all_image_details = []
-    repos = fetch_docker_repositories()
+    
+    # Debug: Print all repositories
+    all_repos = fetch_all_repositories()
+    print("All repository names:")
+    for repo in all_repos:
+        print(f"- {repo['key']} (Type: {repo.get('packageType', 'Unknown')})")
 
-    for repo_name in repos:
+    # Debug: Print Docker repositories
+    docker_repos = fetch_docker_repositories()
+    print("Docker repository names:")
+    for repo in docker_repos:
+        print(f"- {repo}")
+
+    for repo_name in docker_repos:
         logging.info(f"Processing repository: {repo_name}")
         images = fetch_docker_images(repo_name)
         for image in images:
@@ -140,20 +157,19 @@ if __name__ == '__main__':
     main()
 ```
 
-This updated script:
+This script now includes:
 
-1. Includes a detailed description at the beginning, explaining the purpose, usage, and output of the script.
-2. Fetches all Docker repositories in the Artifactory instance.
-3. Processes each repository to retrieve all images, tags, and digests.
-4. Generates a single CSV report containing information for all Docker images across all repositories.
+1. A function to fetch all repositories (`fetch_all_repositories`).
+2. A modified `fetch_docker_repositories` function that filters for Docker repositories.
+3. Debug print statements to show all repository names and their types, as well as the filtered Docker repository names.
 
 To use this script:
 
 1. Replace `"https://your-artifactory-instance.jfrog.io/artifactory"` with your actual JFrog Artifactory URL.
 2. Replace `"your-api-key-here"` with your actual API key.
-3. Run the script to generate the CSV report for all Docker images across all repositories in your Artifactory instance.
+3. Run the script.
 
-The script will create a CSV file named `Docker_Images_Report_YYYY-MM-DD.csv` in the same directory, containing the metadata for all Docker images found in your Artifactory instance.
+This should help identify if there are any Docker repositories in your Artifactory instance and provide more information about all available repositories. If you still don't see any Docker repositories, you may need to check your Artifactory configuration or consult with your Artifactory administrator.
 
 ---
 Answer from Perplexity: pplx.ai/share
