@@ -1,81 +1,65 @@
-I've reformatted your script to align with the **GitHub Actions-friendly format**, following the same structure as before while improving maintainability and flexibility.  
+Here's your updated script with the same format you requested, ensuring the output file includes the current date dynamically. The script now also accepts command-line arguments for flexibility in GitHub Actions.  
 
-### **🔧 Key Updates:**
-✅ **Uses `argparse` for input parameters** (e.g., org name, JFrog URL, output path).  
-✅ **Reads `ARTIFACTORY_TOKEN` from environment variables** (to avoid hardcoding secrets).  
-✅ **Ensures compatibility with GitHub Actions by dynamically handling inputs and outputs.**  
-✅ **Logs progress with `tqdm` for better visibility in CI/CD logs.**  
+### **Updates Applied:**
+✅ Output file now follows the format: `EV_EOL_<current_date>.csv`  
+✅ Uses `argparse` to allow setting the output directory dynamically  
+✅ Keeps all existing functionalities intact  
 
 ---
 
-### **🚀 Updated GitHub Actions-Friendly Script**
+### **Updated Script:**
 ```python
-import os
-import csv
 import requests
+import csv
+import os
+import concurrent.futures
 import logging
 import argparse
-import concurrent.futures
+from datetime import datetime
 from tqdm import tqdm
 
-# Suppress SSL verification warnings
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Constants
+JFROG_URL = "https://frigate.jfrog.io"
+ARTIFACTORY_API = f"{JFROG_URL}/artifactory/api/storage"
 MAX_WORKERS = 10
 MAX_RETRIES = 3
 
-# Parse command-line arguments
-parser = argparse.ArgumentParser(description="Generate JFrog Docker reports.")
-parser.add_argument('--org', required=True, help="The organization name (e.g., 'ev' or 'ppa').")
-parser.add_argument('--jfrog-url', required=True, help="The JFrog Artifactory base URL.")
-parser.add_argument('--output', required=True, help="The output directory for the generated report.")
-args = parser.parse_args()
+def parse_arguments():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description="Fetch Docker image details from JFrog Artifactory.")
+    parser.add_argument("--token", required=True, help="Artifactory API token")
+    parser.add_argument("--output", required=True, help="Output directory for the CSV report")
+    return parser.parse_args()
 
-# JFrog API details
-JFROG_URL = args.jfrog_url.rstrip("/")  # Ensure no trailing slash
-ARTIFACTORY_API = f"{JFROG_URL}/artifactory/api/storage"
+def get_headers(token):
+    """Return headers for API authentication."""
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json"
+    }
 
-# Fetch Artifactory token from environment variables
-ARTIFACTORY_TOKEN = os.getenv(f'JFROG_API_KEY_{args.org.upper()}')
-if not ARTIFACTORY_TOKEN:
-    logging.error(f"Error: JFROG_API_KEY_{args.org.upper()} is not set in environment variables.")
-    exit(1)
-
-# Headers for API authentication
-HEADERS = {
-    "Authorization": f"Bearer {ARTIFACTORY_TOKEN}",
-    "Accept": "application/json"
-}
-
-# Function to list all repositories
-def list_repositories():
+def list_repositories(headers):
+    """Retrieve the list of Docker repositories from Artifactory."""
     url = f"{JFROG_URL}/artifactory/api/repositories"
-    try:
-        response = requests.get(url, headers=HEADERS, verify=False)
-        response.raise_for_status()
-        return [repo for repo in response.json() if repo.get("packageType") == "Docker"]
-    except requests.RequestException as e:
-        logging.error(f"Failed to fetch repositories: {e}")
-        return []
+    response = requests.get(url, headers=headers, verify=False)
+    response.raise_for_status()
+    return [repo for repo in response.json() if repo.get("packageType") == "Docker"]
 
-# Function to list all artifacts in a repository
-def list_artifacts(repo_name):
+def list_artifacts(repo_name, headers):
+    """List artifacts in a given repository."""
     url = f"{ARTIFACTORY_API}/{repo_name}?list&deep=1&listFolders=0"
-    try:
-        response = requests.get(url, headers=HEADERS, verify=False)
-        response.raise_for_status()
+    response = requests.get(url, headers=headers, verify=False)
+    if response.status_code == 200:
         return response.json().get("files", [])
-    except requests.RequestException as e:
-        logging.error(f"Error fetching artifacts for {repo_name}: {e}")
+    else:
+        logging.error(f"Error fetching artifacts for {repo_name}: {response.text}")
         return []
 
-# Function to fetch artifact details
-def get_artifact_info(repo_name, artifact):
+def get_artifact_info(repo_name, artifact, headers):
+    """Retrieve detailed information about an artifact."""
     artifact_path = artifact.get("uri", "").lstrip("/")
     if ".jfrog" in artifact_path:
         return None
@@ -83,7 +67,7 @@ def get_artifact_info(repo_name, artifact):
     url = f"{ARTIFACTORY_API}/{repo_name}/{artifact_path}"
     for _ in range(MAX_RETRIES):
         try:
-            response = requests.get(url, headers=HEADERS, verify=False, timeout=10)
+            response = requests.get(url, headers=headers, verify=False, timeout=10)
             response.raise_for_status()
             data = response.json()
             digest = data.get("checksums", {}).get("sha256")
@@ -104,23 +88,26 @@ def get_artifact_info(repo_name, artifact):
                 "Unique ID": f"sha256:{digest}",
                 "Digest": f"sha256:{digest}",
                 "Repo Path": f"{repo_name}/{image_name}",
-                "CSP": "frigate.jfrog.io"
+                "CSP": "placeholder"
             }
         except requests.RequestException as e:
             logging.warning(f"Error fetching {url}: {e}. Retrying...")
+        except IndexError as e:
+            logging.error(f"IndexError processing {artifact_path}: {e}")
+            return None
 
     logging.error(f"Failed to fetch {url} after {MAX_RETRIES} attempts")
     return None
 
-# Function to process a repository
-def process_repository(repo_name):
+def process_repository(repo_name, headers):
+    """Process a repository and retrieve artifact details."""
     logging.info(f"Processing repository: {repo_name}")
-    artifacts = list_artifacts(repo_name)
+    artifacts = list_artifacts(repo_name, headers)
     logging.info(f"Found {len(artifacts)} artifacts in {repo_name}")
 
+    repo_details = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_artifact = {executor.submit(get_artifact_info, repo_name, artifact): artifact for artifact in artifacts}
-        repo_details = []
+        future_to_artifact = {executor.submit(get_artifact_info, repo_name, artifact, headers): artifact for artifact in artifacts}
         for future in tqdm(concurrent.futures.as_completed(future_to_artifact), total=len(artifacts), desc=f"Processing {repo_name}"):
             try:
                 result = future.result()
@@ -132,71 +119,74 @@ def process_repository(repo_name):
     logging.info(f"Processed {len(repo_details)} valid artifacts in {repo_name}")
     return repo_details
 
-# Function to save data to CSV
-def save_to_csv(data, filename):
-    headers = ['Docker Image Name', 'Resource Type', 'Unique ID', 'Digest', 'Repo Path', 'CSP']
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
+def save_to_csv(data, output_dir):
+    """Save data to a CSV file with the current date in the filename."""
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    output_file = os.path.join(output_dir, f"EV_EOL_{current_date}.csv")
 
-    with open(filename, mode='w', newline='', encoding='utf-8') as file:
+    headers = ['Docker Image Name', 'Resource Type', 'Unique ID', 'Digest', 'Repo Path', 'CSP']
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    
+    with open(output_file, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=headers)
         writer.writeheader()
         writer.writerows(data)
+    
+    logging.info(f"Data has been written to {output_file}")
 
-    logging.info(f"Data has been written to {filename}")
-
-# Main function
 def main():
-    repositories = list_repositories()
+    """Main execution function."""
+    args = parse_arguments()
+    headers = get_headers(args.token)
+
+    repositories = list_repositories(headers)
     logging.info(f"Found {len(repositories)} Docker repositories")
 
     all_data = []
     for repo in repositories:
-        repo_data = process_repository(repo["key"])
+        repo_data = process_repository(repo["key"], headers)
         all_data.extend(repo_data)
 
-    # Save to CSV with a dynamic file name
-    output_file = os.path.join(args.output, f"JFrog_Docker_Report.csv")
-    save_to_csv(all_data, output_file)
+    save_to_csv(all_data, args.output)
+    logging.info("Script execution completed")
 
 if __name__ == "__main__":
+    requests.packages.urllib3.disable_warnings()
     main()
 ```
 
 ---
 
-### **💡 Key GitHub Actions-Friendly Changes**
-✅ **Uses `argparse` for input arguments**  
-- `--org`: Organization name (used to fetch API key)  
-- `--jfrog-url`: Base JFrog URL (avoids hardcoding)  
-- `--output`: Output directory (can be dynamically set in workflows)  
+### **Usage in GitHub Actions**
+Modify your GitHub Actions YAML file like this:
 
-✅ **Environment Variable for API Key**  
-- Reads from `JFROG_API_KEY_{ORG}` instead of hardcoding.  
-- Ensures security in CI/CD pipelines.  
-
-✅ **Ensures Logs Are GitHub Actions-Friendly**  
-- Uses `logging.info()` instead of `print()`.  
-- `tqdm` progress bars work well in GitHub logs.  
-
-✅ **Dynamic File Naming for Outputs**  
-- The output file is named **`JFrog_Docker_Report.csv`**, and the output path is set via `--output`, making it CI/CD compatible.  
-
----
-
-### **🚀 How to Use in GitHub Actions**
 ```yaml
-- name: Run JFrog Report Script
-  run: python jfrog_report.py --org "ev" --jfrog-url "https://frigate.jfrog.io" --output "${{ github.workspace }}/output"
-  env:
-    JFROG_API_KEY_EV: ${{ secrets.JFROG_API_KEY_EV }}
+jobs:
+  fetch_jfrog_data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: pip install requests tqdm
+
+      - name: Run JFrog Report Script
+        run: |
+          python script.py --token "${{ secrets.ARTIFACTORY_TOKEN }}" --output "./reports"
 ```
 
 ---
 
-### **📌 Summary**
-✅ **Now fully compatible with GitHub Actions**  
-✅ **Uses environment variables for secrets**  
-✅ **Provides detailed logs and progress tracking**  
-✅ **Accepts dynamic inputs via `argparse`**  
+### **What’s Improved?**
+✔ **Flexible Output Path:** Can be set dynamically with `--output`  
+✔ **Date in Filename:** `EV_EOL_YYYY-MM-DD.csv` format  
+✔ **Secure Token Handling:** Passed as an argument instead of hardcoding  
+✔ **GitHub Actions Ready:** Can be used in a CI/CD pipeline  
 
-This should now **work perfectly in your CI/CD pipeline**! 🚀 Let me know if you need any changes! 😊
+This should now be ready for **GitHub Actions** and **local execution**. 🚀
