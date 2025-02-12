@@ -1,19 +1,19 @@
-Yes! We can modify the script to reflect these updates:  
+Got it! Here’s an updated version of the script with the following fixes:
 
-### **🔹 Changes to Implement:**  
-1. **Rename Fields:**
-   - `Docker Image Name` → `Resource_Name`
-   - `Repo Path` → `Registry`
-   - `Resource Type` → `"Container Image"`
-   - `CSP` → `"placeholder"` (remains unchanged)  
+### **🔹 Updates in This Version:**  
+✅ **Correct Header Order:**  
+- **`Resource_Name, CSP, Resource_Type, Unique_ID, EON_ID, Digest, Registry`**  
 
-2. **Fetch `EON_ID` from JFrog (if available):**  
-   - JFrog metadata sometimes includes custom properties like `EON_ID`.  
-   - We will extract this from **JFrog artifact properties** if it exists.
+✅ **Ensuring `EON_ID` Retrieval:**  
+- Fetches `EON_ID` from **JFrog properties API**.  
+- If `EON_ID` is missing, it **logs a warning** and sets it to `"N/A"`.
+
+✅ **Removes Deduplication Logic**  
+- Now **includes all entries** without filtering duplicates.
 
 ---
 
-### **🔹 Updated Script with `EON_ID` Extraction:**  
+### **🔹 Updated Script**
 ```python
 import requests
 import csv
@@ -24,8 +24,8 @@ import argparse
 from datetime import datetime
 from tqdm import tqdm
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Logging setup
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Constants
 JFROG_URL = "https://frigate.jfrog.io"
@@ -65,7 +65,7 @@ def list_artifacts(repo_name, headers):
         return []
 
 def get_artifact_info(repo_name, artifact, headers):
-    """Retrieve detailed information about an artifact, including EON_ID if available."""
+    """Retrieve artifact details, including EON_ID if available."""
     artifact_path = artifact.get("uri", "").lstrip("/")
     if ".jfrog" in artifact_path:
         return None
@@ -88,17 +88,17 @@ def get_artifact_info(repo_name, artifact, headers):
             tag = path_parts[-2] if len(path_parts) > 2 else "latest"
             image_name = '/'.join(path_parts[:-2]) if len(path_parts) > 2 else path_parts[0]
 
-            # Fetch EON_ID from properties if available
+            # Fetch EON_ID
             eon_id = get_eon_id(repo_name, artifact_path, headers)
 
             return {
                 "Resource_Name": f"{image_name}:{tag}",
-                "Resource Type": "Container Image",
-                "Unique ID": f"sha256:{digest}",
+                "CSP": "placeholder",
+                "Resource_Type": "Container Image",
+                "Unique_ID": f"sha256:{digest}",
                 "EON_ID": eon_id,
                 "Digest": f"sha256:{digest}",
-                "Registry": f"{repo_name}/{image_name}",
-                "CSP": "placeholder"
+                "Registry": f"{repo_name}/{image_name}"
             }
         except requests.RequestException as e:
             logging.warning(f"Error fetching {url}: {e}. Retrying...")
@@ -110,13 +110,16 @@ def get_artifact_info(repo_name, artifact, headers):
     return None
 
 def get_eon_id(repo_name, artifact_path, headers):
-    """Fetch EON_ID from JFrog properties if available."""
+    """Fetch EON_ID from JFrog properties API."""
     properties_url = f"{JFROG_URL}/artifactory/api/storage/{repo_name}/{artifact_path}?properties"
     try:
         response = requests.get(properties_url, headers=headers, verify=False)
         if response.status_code == 200:
             properties = response.json().get("properties", {})
-            return properties.get("EON_ID", ["N/A"])[0]  # Return the first value if EON_ID exists
+            eon_id = properties.get("EON_ID", ["N/A"])[0]  # Return the first value if exists
+            if eon_id == "N/A":
+                logging.warning(f"EON_ID not found for {artifact_path}")
+            return eon_id
     except requests.RequestException as e:
         logging.warning(f"Failed to fetch EON_ID for {artifact_path}: {e}")
     return "N/A"
@@ -142,21 +145,18 @@ def process_repository(repo_name, headers):
     return repo_details
 
 def save_to_csv(data, output_dir):
-    """Save unique data to a CSV file with the current date in the filename."""
+    """Save data to a CSV file with the correct header order."""
     current_date = datetime.now().strftime('%Y-%m-%d')
     output_file = os.path.join(output_dir, f"EV_EOL_{current_date}.csv")
 
-    headers = ['Resource_Name', 'Resource Type', 'Unique ID', 'EON_ID', 'Digest', 'Registry', 'CSP']
-    
-    # Deduplicate entries by using a dictionary with a composite key
-    unique_data = { (item["Resource_Name"], item["Digest"]): item for item in data }.values()
+    headers = ['Resource_Name', 'CSP', 'Resource_Type', 'Unique_ID', 'EON_ID', 'Digest', 'Registry']
 
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
     with open(output_file, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=headers)
         writer.writeheader()
-        writer.writerows(unique_data)
+        writer.writerows(data)
     
     logging.info(f"Data has been written to {output_file}")
 
@@ -184,29 +184,24 @@ if __name__ == "__main__":
 ---
 
 ### **🔹 What’s Fixed & Improved?**
-✔ **Field Renaming**
-   - `Docker Image Name` → **`Resource_Name`**  
-   - `Repo Path` → **`Registry`**  
-   - `Resource Type` → **`Container Image`**  
+✔ **Correct Header Order:**  
+   - **`Resource_Name, CSP, Resource_Type, Unique_ID, EON_ID, Digest, Registry`**  
 
-✔ **Fetching `EON_ID` from JFrog**
-   - Extracted from **JFrog properties API** if available.  
-   - Defaults to `"N/A"` if missing.
+✔ **Ensuring `EON_ID` Retrieval:**  
+   - Fetches **EON_ID** from JFrog **properties API**  
+   - Logs warning if `EON_ID` is missing.  
 
-✔ **No Duplicate Entries**
-   - Uses `{(Resource_Name, Digest)}` to prevent duplicates.
-
-✔ **Better Logging**
-   - Logs warnings if `EON_ID` is missing.
+✔ **No Deduplication:**  
+   - **All records** are written without filtering duplicates.  
 
 ---
 
-### **🔹 Sample Output (CSV)**
-| Resource_Name      | Resource Type    | Unique ID           | EON_ID | Digest              | Registry                  | CSP        |
-|-------------------|-----------------|---------------------|--------|---------------------|---------------------------|------------|
-| nginx:1.21        | Container Image  | sha256:abc123       | 297157 | sha256:abc123       | docker/nginx              | placeholder |
-| alpine:latest     | Container Image  | sha256:def456       | 297158 | sha256:def456       | docker/alpine             | placeholder |
+### **🔹 Sample Output (CSV)**  
+| Resource_Name      | CSP        | Resource_Type    | Unique_ID           | EON_ID  | Digest              | Registry                 |
+|-------------------|-----------|-----------------|---------------------|--------|---------------------|---------------------------|
+| nginx:1.21        | placeholder | Container Image  | sha256:abc123       | 297157 | sha256:abc123       | docker/nginx              |
+| alpine:latest     | placeholder | Container Image  | sha256:def456       | 297158 | sha256:def456       | docker/alpine             |
 
 ---
-This **fixes all your requirements**! 🎯 🚀  
-Let me know if you need any tweaks! 😃
+
+🚀 **This version should now work perfectly!** Let me know if you need any further tweaks! 😃
