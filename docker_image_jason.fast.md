@@ -1,10 +1,4 @@
-You're absolutely correct! If the `EON_ID` is stored as an environment variable in the build information, fetching it from the builds API would be a more reliable and structured approach. JFrog Artifactory provides APIs to retrieve build information, including environment variables, which can contain metadata like `EON_ID`.
-
-Below is the updated script that fetches the `EON_ID` from the build information under environment variables.
-
----
-
-### Updated Script
+Certainly! Here's the full script incorporating the changes we discussed, formatted in the previous style:
 
 ```python
 import requests
@@ -17,12 +11,11 @@ from datetime import datetime
 from tqdm import tqdm
 
 # Logging setup
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Constants
 JFROG_URL = "https://frigate.jfrog.io"
 ARTIFACTORY_API = f"{JFROG_URL}/artifactory/api/storage"
-BUILDS_API = f"{JFROG_URL}/artifactory/api/build"
 MAX_WORKERS = 10
 MAX_RETRIES = 3
 
@@ -57,22 +50,23 @@ def list_artifacts(repo_name, headers):
         logging.error(f"Error fetching artifacts for {repo_name}: {response.text}")
         return []
 
-def get_eon_id_from_builds(build_name, build_number, headers):
-    """Fetch EON_ID from build environment variables."""
-    build_info_url = f"{BUILDS_API}/{build_name}/{build_number}"
+def get_build_info(build_name, build_number, headers):
+    """Fetch build info from Artifactory."""
+    url = f"{JFROG_URL}/artifactory/api/build/{build_name}/{build_number}"
     try:
-        response = requests.get(build_info_url, headers=headers, verify=False)
+        response = requests.get(url, headers=headers, verify=False)
         if response.status_code == 200:
-            build_info = response.json()
-            env_vars = build_info.get("buildInfo", {}).get("properties", {})
-            eon_id = env_vars.get("EON_ID", "N/A")
-            if eon_id == "N/A":
-                logging.warning(f"EON_ID not found in build {build_name}/{build_number}")
-            return eon_id
+            return response.json()
         else:
-            logging.warning(f"Failed to fetch build info for {build_name}/{build_number}: {response.text}")
+            logging.warning(f"Failed to fetch build info for {build_name}/{build_number}: {response.status_code}")
     except requests.RequestException as e:
-        logging.warning(f"Failed to fetch build info for {build_name}/{build_number}: {e}")
+        logging.warning(f"Error fetching build info: {e}")
+    return None
+
+def fetch_eon_id_from_custom_location(repo_name, artifact_path, headers):
+    """Fetch EON_ID from a custom location if it exists."""
+    # Implement custom logic here if there's a specific API or location for EON_ID
+    logging.info(f"Attempting to fetch EON_ID from custom location for {repo_name}/{artifact_path}")
     return "N/A"
 
 def get_artifact_info(repo_name, artifact, headers):
@@ -99,13 +93,36 @@ def get_artifact_info(repo_name, artifact, headers):
             tag = path_parts[-2] if len(path_parts) > 2 else "latest"
             image_name = '/'.join(path_parts[:-2]) if len(path_parts) > 2 else path_parts[0]
 
-            # Fetch EON ID from builds (example assumes build name and number are part of artifact metadata)
-            build_name = data.get("properties", {}).get("build.name", None)
-            build_number = data.get("properties", {}).get("build.number", None)
-            
+            # Search for EON_ID in various locations
             eon_id = "N/A"
+            properties = data.get("properties", {})
+            
+            # Log all properties for debugging
+            logging.debug(f"All properties for {artifact_path}: {properties}")
+
+            # Check in properties
+            if "EON_ID" in properties:
+                eon_id = properties["EON_ID"]
+                logging.info(f"Found EON_ID in properties: {eon_id}")
+            elif "eon.id" in properties:
+                eon_id = properties["eon.id"]
+                logging.info(f"Found EON_ID as eon.id in properties: {eon_id}")
+            
+            # Check in build info
+            build_name = properties.get("build.name")
+            build_number = properties.get("build.number")
             if build_name and build_number:
-                eon_id = get_eon_id_from_builds(build_name, build_number, headers)
+                build_info = get_build_info(build_name, build_number, headers)
+                if build_info:
+                    env_vars = build_info.get("buildInfo", {}).get("environmentVariables", {})
+                    if "EON_ID" in env_vars:
+                        eon_id = env_vars["EON_ID"]
+                        logging.info(f"Found EON_ID in build info: {eon_id}")
+                    logging.debug(f"Build info env vars: {env_vars}")
+
+            # If still not found, try to fetch from a custom API or location
+            if eon_id == "N/A":
+                eon_id = fetch_eon_id_from_custom_location(repo_name, artifact_path, headers)
 
             # Ensure the digest is correctly formatted
             formatted_digest = f"sha256:{digest}" if not digest.startswith("sha256:") else digest
@@ -185,26 +202,23 @@ if __name__ == "__main__":
     main()
 ```
 
----
+This script includes all the modifications we discussed:
 
-### Key Updates:
+1. Enhanced logging for debugging purposes.
+2. Multiple checks for EON_ID in different locations (properties, build info, custom location).
+3. Fetching of build information when available.
+4. A placeholder function for fetching EON_ID from a custom location if needed.
 
-1. **`get_eon_id_from_builds` Function**: 
-   - Fetches the `EON_ID` from the `buildInfo` API under environment variables.
+To use this script:
 
-2. **Integration with `get_artifact_info`**: 
-   - If `build.name` and `build.number` are available in the artifact's metadata (via properties), they are used to fetch `EON_ID`.
+1. Ensure you have all the required libraries installed (`requests`, `tqdm`).
+2. Run the script with the appropriate arguments:
+   ```
+   python script_name.py --token YOUR_ARTIFACTORY_TOKEN --output /path/to/output/directory
+   ```
+3. Check the debug logs to see where (if anywhere) the EON_ID is being found.
 
-3. **Graceful Fallback**: 
-   - If `EON_ID` is not found or builds are not linked to an artifact, it defaults to `"N/A"`.
-
----
-
-### Assumptions:
-- The `build.name` and `build.number` properties are available in the artifact metadata.
-- The environment variable `EON_ID` is set during builds and accessible via the builds API.
-
-This approach ensures that you reliably fetch `EON_ID` without relying on Xray or other less consistent methods.
+If you're still not seeing the EON_ID after running this script, the next step would be to examine the debug logs carefully to understand what data is available for each artifact. This will help determine if the EON_ID is stored in an unexpected location or format in your Artifactory setup.
 
 ---
 Answer from Perplexity: pplx.ai/share
