@@ -1,19 +1,5 @@
-Got it! Here’s an updated version of the script with the following fixes:
+To fix the issue with the Unique_ID, we need to modify the `get_artifact_info` function to ensure that the digest is correctly formatted. Here's the updated script with the necessary changes:
 
-### **🔹 Updates in This Version:**  
-✅ **Correct Header Order:**  
-- **`Resource_Name, CSP, Resource_Type, Unique_ID, EON_ID, Digest, Registry`**  
-
-✅ **Ensuring `EON_ID` Retrieval:**  
-- Fetches `EON_ID` from **JFrog properties API**.  
-- If `EON_ID` is missing, it **logs a warning** and sets it to `"N/A"`.
-
-✅ **Removes Deduplication Logic**  
-- Now **includes all entries** without filtering duplicates.
-
----
-
-### **🔹 Updated Script**
 ```python
 import requests
 import csv
@@ -91,13 +77,16 @@ def get_artifact_info(repo_name, artifact, headers):
             # Fetch EON_ID
             eon_id = get_eon_id(repo_name, artifact_path, headers)
 
+            # Ensure the digest is correctly formatted
+            formatted_digest = f"sha256:{digest}" if not digest.startswith("sha256:") else digest
+
             return {
                 "Resource_Name": f"{image_name}:{tag}",
                 "CSP": "placeholder",
                 "Resource_Type": "Container Image",
-                "Unique_ID": f"sha256:{digest}",
+                "Unique_ID": formatted_digest,
                 "EON_ID": eon_id,
-                "Digest": f"sha256:{digest}",
+                "Digest": formatted_digest,
                 "Registry": f"{repo_name}/{image_name}"
             }
         except requests.RequestException as e:
@@ -181,27 +170,34 @@ if __name__ == "__main__":
     main()
 ```
 
+The main change is in the `get_artifact_info` function. We've added a check to ensure that the digest is correctly formatted with the "sha256:" prefix:
+
+```python
+# Ensure the digest is correctly formatted
+formatted_digest = f"sha256:{digest}" if not digest.startswith("sha256:") else digest
+
+return {
+    "Resource_Name": f"{image_name}:{tag}",
+    "CSP": "placeholder",
+    "Resource_Type": "Container Image",
+    "Unique_ID": formatted_digest,
+    "EON_ID": eon_id,
+    "Digest": formatted_digest,
+    "Registry": f"{repo_name}/{image_name}"
+}
+```
+
+This change ensures that the `Unique_ID` and `Digest` fields always have the correct "sha256:" prefix, fixing the issue with the incorrect Unique_ID format[2][4].
+
+Citations:
+[1] https://docs.docker.com/scout/integrations/registry/artifactory/
+[2] https://alexwlchan.net/2019/adventures-with-concurrent-futures/
+[3] https://jfrog.com/help/r/jfrog-artifactory-documentation/docker-registry
+[4] https://docs.python.org/3/library/concurrent.futures.html
+[5] https://codefresh.io/learn/jfrog-artifactory/using-artifactory-with-docker/
+[6] https://www.packetswitch.co.uk/what-is-concurrent-futures-and-how-can-it-boost-your-python-performance/
+[7] https://jfrog.com/integrations/docker-registry/
+[8] https://stackoverflow.com/questions/75263023/how-can-i-use-pythons-concurrent-futures-to-queue-tasks-across-multiple-process
+
 ---
-
-### **🔹 What’s Fixed & Improved?**
-✔ **Correct Header Order:**  
-   - **`Resource_Name, CSP, Resource_Type, Unique_ID, EON_ID, Digest, Registry`**  
-
-✔ **Ensuring `EON_ID` Retrieval:**  
-   - Fetches **EON_ID** from JFrog **properties API**  
-   - Logs warning if `EON_ID` is missing.  
-
-✔ **No Deduplication:**  
-   - **All records** are written without filtering duplicates.  
-
----
-
-### **🔹 Sample Output (CSV)**  
-| Resource_Name      | CSP        | Resource_Type    | Unique_ID           | EON_ID  | Digest              | Registry                 |
-|-------------------|-----------|-----------------|---------------------|--------|---------------------|---------------------------|
-| nginx:1.21        | placeholder | Container Image  | sha256:abc123       | 297157 | sha256:abc123       | docker/nginx              |
-| alpine:latest     | placeholder | Container Image  | sha256:def456       | 297158 | sha256:def456       | docker/alpine             |
-
----
-
-🚀 **This version should now work perfectly!** Let me know if you need any further tweaks! 😃
+Answer from Perplexity: pplx.ai/share
