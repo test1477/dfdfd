@@ -1,4 +1,10 @@
-Certainly! Here's the full script incorporating the changes we discussed, including the new `get_eon_id_from_xray` function and the updated `get_artifact_info` function. The script follows the previous format and includes the EV_EOL CSV output:
+You're absolutely correct! If the `EON_ID` is stored as an environment variable in the build information, fetching it from the builds API would be a more reliable and structured approach. JFrog Artifactory provides APIs to retrieve build information, including environment variables, which can contain metadata like `EON_ID`.
+
+Below is the updated script that fetches the `EON_ID` from the build information under environment variables.
+
+---
+
+### Updated Script
 
 ```python
 import requests
@@ -16,6 +22,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # Constants
 JFROG_URL = "https://frigate.jfrog.io"
 ARTIFACTORY_API = f"{JFROG_URL}/artifactory/api/storage"
+BUILDS_API = f"{JFROG_URL}/artifactory/api/build"
 MAX_WORKERS = 10
 MAX_RETRIES = 3
 
@@ -50,21 +57,22 @@ def list_artifacts(repo_name, headers):
         logging.error(f"Error fetching artifacts for {repo_name}: {response.text}")
         return []
 
-def get_eon_id_from_xray(repo_name, artifact_path, headers):
-    """Fetch EON ID from JFrog Xray API."""
-    xray_url = f"{JFROG_URL}/xray/api/v1/artifacts/{repo_name}/{artifact_path}"
+def get_eon_id_from_builds(build_name, build_number, headers):
+    """Fetch EON_ID from build environment variables."""
+    build_info_url = f"{BUILDS_API}/{build_name}/{build_number}"
     try:
-        response = requests.get(xray_url, headers=headers, verify=False)
+        response = requests.get(build_info_url, headers=headers, verify=False)
         if response.status_code == 200:
-            xray_data = response.json()
-            eon_id = xray_data.get("eon_id", "N/A")
+            build_info = response.json()
+            env_vars = build_info.get("buildInfo", {}).get("properties", {})
+            eon_id = env_vars.get("EON_ID", "N/A")
             if eon_id == "N/A":
-                logging.warning(f"EON_ID not found for {artifact_path} in Xray")
+                logging.warning(f"EON_ID not found in build {build_name}/{build_number}")
             return eon_id
         else:
-            logging.warning(f"Failed to fetch EON_ID for {artifact_path} from Xray: {response.text}")
+            logging.warning(f"Failed to fetch build info for {build_name}/{build_number}: {response.text}")
     except requests.RequestException as e:
-        logging.warning(f"Failed to fetch EON_ID for {artifact_path} from Xray: {e}")
+        logging.warning(f"Failed to fetch build info for {build_name}/{build_number}: {e}")
     return "N/A"
 
 def get_artifact_info(repo_name, artifact, headers):
@@ -91,8 +99,13 @@ def get_artifact_info(repo_name, artifact, headers):
             tag = path_parts[-2] if len(path_parts) > 2 else "latest"
             image_name = '/'.join(path_parts[:-2]) if len(path_parts) > 2 else path_parts[0]
 
-            # Fetch EON ID from Xray
-            eon_id = get_eon_id_from_xray(repo_name, artifact_path, headers)
+            # Fetch EON ID from builds (example assumes build name and number are part of artifact metadata)
+            build_name = data.get("properties", {}).get("build.name", None)
+            build_number = data.get("properties", {}).get("build.number", None)
+            
+            eon_id = "N/A"
+            if build_name and build_number:
+                eon_id = get_eon_id_from_builds(build_name, build_number, headers)
 
             # Ensure the digest is correctly formatted
             formatted_digest = f"sha256:{digest}" if not digest.startswith("sha256:") else digest
@@ -172,19 +185,26 @@ if __name__ == "__main__":
     main()
 ```
 
-This script now includes:
+---
 
-1. The new `get_eon_id_from_xray` function to fetch EON_ID from JFrog Xray.
-2. An updated `get_artifact_info` function that uses the Xray API to fetch EON_ID.
-3. The same CSV output format as before, with the filename starting with "EV_EOL_".
+### Key Updates:
 
-Make sure to run this script with the appropriate arguments:
+1. **`get_eon_id_from_builds` Function**: 
+   - Fetches the `EON_ID` from the `buildInfo` API under environment variables.
 
-```
-python script_name.py --token YOUR_ARTIFACTORY_TOKEN --output /path/to/output/directory
-```
+2. **Integration with `get_artifact_info`**: 
+   - If `build.name` and `build.number` are available in the artifact's metadata (via properties), they are used to fetch `EON_ID`.
 
-Remember to replace `YOUR_ARTIFACTORY_TOKEN` with your actual JFrog Artifactory API token and specify the desired output directory.
+3. **Graceful Fallback**: 
+   - If `EON_ID` is not found or builds are not linked to an artifact, it defaults to `"N/A"`.
+
+---
+
+### Assumptions:
+- The `build.name` and `build.number` properties are available in the artifact metadata.
+- The environment variable `EON_ID` is set during builds and accessible via the builds API.
+
+This approach ensures that you reliably fetch `EON_ID` without relying on Xray or other less consistent methods.
 
 ---
 Answer from Perplexity: pplx.ai/share
