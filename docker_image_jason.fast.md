@@ -1,4 +1,4 @@
-Certainly! I'll modify the script to accept command-line arguments for the token and output directory. Here's the updated version that works with the format you specified:
+Certainly! Here's the full updated script incorporating all the changes we've discussed, including the correct handling of `buildInfo.env.EON_ID`:
 
 ```python
 import requests
@@ -10,7 +10,7 @@ from datetime import datetime
 from tqdm import tqdm
 
 # Logging setup
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Constants (Replace with your JFrog URL)
 JFROG_URL = "https://your-jfrog-instance/artifactory"
@@ -55,12 +55,39 @@ def get_build_info(build_name, build_number, headers):
     try:
         response = requests.get(url, headers=headers, verify=False)
         if response.status_code == 200:
-            return response.json()
+            build_info = response.json()
+            logging.debug(f"Build info for {build_name}/{build_number}: {build_info}")
+            return build_info
         else:
             logging.warning(f"Failed to fetch build info for {build_name}/{build_number}: {response.status_code}")
     except requests.RequestException as e:
         logging.warning(f"Error fetching build info: {e}")
     return None
+
+def get_eon_id_from_build_info(build_info):
+    if not build_info:
+        return "N/A"
+    
+    # Check in buildInfo.env
+    eon_id = build_info.get("buildInfo", {}).get("env", {}).get("EON_ID")
+    if eon_id:
+        logging.debug(f"Found EON_ID in buildInfo.env: {eon_id}")
+        return eon_id
+    
+    # Check in properties (some setups might store it here)
+    eon_id = build_info.get("buildInfo", {}).get("properties", {}).get("buildInfo.env.EON_ID")
+    if eon_id:
+        logging.debug(f"Found EON_ID in buildInfo.properties: {eon_id}")
+        return eon_id
+    
+    # As a fallback, check in root properties
+    eon_id = build_info.get("properties", {}).get("buildInfo.env.EON_ID")
+    if eon_id:
+        logging.debug(f"Found EON_ID in root properties: {eon_id}")
+        return eon_id
+    
+    logging.debug(f"EON_ID not found in build info: {build_info}")
+    return "N/A"
 
 def get_artifact_info(repo_name, artifact, headers):
     artifact_path = artifact.get("uri", "").lstrip("/")
@@ -92,8 +119,7 @@ def get_artifact_info(repo_name, artifact, headers):
             eon_id = "N/A"
             if build_name and build_number:
                 build_info = get_build_info(build_name, build_number, headers)
-                if build_info:
-                    eon_id = build_info.get("buildInfo", {}).get("properties", {}).get("buildInfo.env.EON_ID", "N/A")
+                eon_id = get_eon_id_from_build_info(build_info)
 
             formatted_digest = f"sha256:{digest}" if not digest.startswith("sha256:") else digest
 
@@ -163,19 +189,18 @@ if __name__ == "__main__":
 
 To use this script:
 
-1. Save it as `script_name.py` (or any name you prefer).
+1. Save it as `jfrog_artifact_info.py` (or any name you prefer).
 2. Make sure you have the required libraries installed (`requests`, `tqdm`).
-3. Run the script using:
+3. Replace the `JFROG_URL` constant at the top of the script with your actual JFrog Artifactory URL.
+4. Run the script using:
 
    ```
-   python script_name.py --token YOUR_ARTIFACTORY_TOKEN --output /path/to/output/directory
+   python jfrog_artifact_info.py --token YOUR_ARTIFACTORY_TOKEN --output /path/to/output/directory
    ```
 
    Replace `YOUR_ARTIFACTORY_TOKEN` with your actual JFrog Artifactory API token and `/path/to/output/directory` with the directory where you want the CSV file to be saved.
 
-4. The script will process all Docker repositories in your JFrog Artifactory and create a CSV file named `EV_EOL_YYYY-MM-DD.csv` in the specified output directory.
-
-Remember to replace the `JFROG_URL` constant at the beginning of the script with your actual JFrog Artifactory URL.
+This script should now correctly handle the `buildInfo.env.EON_ID` property and provide detailed logging about where it finds (or doesn't find) the EON_ID. It will process all Docker repositories in your JFrog Artifactory and create a CSV file named `EV_EOL_YYYY-MM-DD.csv` in the specified output directory.
 
 ---
 Answer from Perplexity: pplx.ai/share
