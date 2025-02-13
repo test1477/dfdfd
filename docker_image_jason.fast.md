@@ -1,58 +1,57 @@
-Certainly! Here's the full script incorporating the changes we discussed, formatted in the previous style:
+Certainly! I'll modify the script to accept command-line arguments for the token and output directory. Here's the updated version that works with the format you specified:
 
 ```python
 import requests
 import csv
 import os
-import concurrent.futures
 import logging
 import argparse
 from datetime import datetime
 from tqdm import tqdm
 
 # Logging setup
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Constants
-JFROG_URL = "https://frigate.jfrog.io"
-ARTIFACTORY_API = f"{JFROG_URL}/artifactory/api/storage"
-MAX_WORKERS = 10
+# Constants (Replace with your JFrog URL)
+JFROG_URL = "https://your-jfrog-instance/artifactory"
+ARTIFACTORY_API = f"{JFROG_URL}/api/storage"
+REPOSITORIES_API = f"{JFROG_URL}/api/repositories"
+BUILDS_API = f"{JFROG_URL}/api/build"
 MAX_RETRIES = 3
 
 def parse_arguments():
-    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Fetch Docker image details from JFrog Artifactory.")
     parser.add_argument("--token", required=True, help="Artifactory API token")
     parser.add_argument("--output", required=True, help="Output directory for the CSV report")
     return parser.parse_args()
 
 def get_headers(token):
-    """Return headers for API authentication."""
     return {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json"
     }
 
 def list_repositories(headers):
-    """Retrieve the list of Docker repositories from Artifactory."""
-    url = f"{JFROG_URL}/artifactory/api/repositories"
-    response = requests.get(url, headers=headers, verify=False)
-    response.raise_for_status()
-    return [repo for repo in response.json() if repo.get("packageType") == "Docker"]
+    try:
+        response = requests.get(REPOSITORIES_API, headers=headers, verify=False)
+        response.raise_for_status()
+        return [repo for repo in response.json() if repo.get("packageType") == "Docker"]
+    except requests.RequestException as e:
+        logging.error(f"Error fetching repositories: {e}")
+        return []
 
 def list_artifacts(repo_name, headers):
-    """List artifacts in a given repository."""
     url = f"{ARTIFACTORY_API}/{repo_name}?list&deep=1&listFolders=0"
-    response = requests.get(url, headers=headers, verify=False)
-    if response.status_code == 200:
+    try:
+        response = requests.get(url, headers=headers, verify=False)
+        response.raise_for_status()
         return response.json().get("files", [])
-    else:
-        logging.error(f"Error fetching artifacts for {repo_name}: {response.text}")
+    except requests.RequestException as e:
+        logging.error(f"Error fetching artifacts for {repo_name}: {e}")
         return []
 
 def get_build_info(build_name, build_number, headers):
-    """Fetch build info from Artifactory."""
-    url = f"{JFROG_URL}/artifactory/api/build/{build_name}/{build_number}"
+    url = f"{BUILDS_API}/{build_name}/{build_number}"
     try:
         response = requests.get(url, headers=headers, verify=False)
         if response.status_code == 200:
@@ -63,14 +62,7 @@ def get_build_info(build_name, build_number, headers):
         logging.warning(f"Error fetching build info: {e}")
     return None
 
-def fetch_eon_id_from_custom_location(repo_name, artifact_path, headers):
-    """Fetch EON_ID from a custom location if it exists."""
-    # Implement custom logic here if there's a specific API or location for EON_ID
-    logging.info(f"Attempting to fetch EON_ID from custom location for {repo_name}/{artifact_path}")
-    return "N/A"
-
 def get_artifact_info(repo_name, artifact, headers):
-    """Retrieve artifact details, including EON ID if available."""
     artifact_path = artifact.get("uri", "").lstrip("/")
     if ".jfrog" in artifact_path:
         return None
@@ -78,7 +70,7 @@ def get_artifact_info(repo_name, artifact, headers):
     url = f"{ARTIFACTORY_API}/{repo_name}/{artifact_path}"
     for _ in range(MAX_RETRIES):
         try:
-            response = requests.get(url, headers=headers, verify=False, timeout=10)
+            response = requests.get(url, headers=headers, verify=False)
             response.raise_for_status()
             data = response.json()
             digest = data.get("checksums", {}).get("sha256")
@@ -93,38 +85,16 @@ def get_artifact_info(repo_name, artifact, headers):
             tag = path_parts[-2] if len(path_parts) > 2 else "latest"
             image_name = '/'.join(path_parts[:-2]) if len(path_parts) > 2 else path_parts[0]
 
-            # Search for EON_ID in various locations
-            eon_id = "N/A"
             properties = data.get("properties", {})
-            
-            # Log all properties for debugging
-            logging.debug(f"All properties for {artifact_path}: {properties}")
-
-            # Check in properties
-            if "EON_ID" in properties:
-                eon_id = properties["EON_ID"]
-                logging.info(f"Found EON_ID in properties: {eon_id}")
-            elif "eon.id" in properties:
-                eon_id = properties["eon.id"]
-                logging.info(f"Found EON_ID as eon.id in properties: {eon_id}")
-            
-            # Check in build info
             build_name = properties.get("build.name")
             build_number = properties.get("build.number")
+            
+            eon_id = "N/A"
             if build_name and build_number:
                 build_info = get_build_info(build_name, build_number, headers)
                 if build_info:
-                    env_vars = build_info.get("buildInfo", {}).get("environmentVariables", {})
-                    if "EON_ID" in env_vars:
-                        eon_id = env_vars["EON_ID"]
-                        logging.info(f"Found EON_ID in build info: {eon_id}")
-                    logging.debug(f"Build info env vars: {env_vars}")
+                    eon_id = build_info.get("buildInfo", {}).get("properties", {}).get("buildInfo.env.EON_ID", "N/A")
 
-            # If still not found, try to fetch from a custom API or location
-            if eon_id == "N/A":
-                eon_id = fetch_eon_id_from_custom_location(repo_name, artifact_path, headers)
-
-            # Ensure the digest is correctly formatted
             formatted_digest = f"sha256:{digest}" if not digest.startswith("sha256:") else digest
 
             return {
@@ -138,41 +108,30 @@ def get_artifact_info(repo_name, artifact, headers):
             }
         except requests.RequestException as e:
             logging.warning(f"Error fetching {url}: {e}. Retrying...")
-        except IndexError as e:
-            logging.error(f"IndexError processing {artifact_path}: {e}")
-            return None
 
     logging.error(f"Failed to fetch {url} after {MAX_RETRIES} attempts")
     return None
 
 def process_repository(repo_name, headers):
-    """Process a repository and retrieve artifact details."""
     logging.info(f"Processing repository: {repo_name}")
     artifacts = list_artifacts(repo_name, headers)
     logging.info(f"Found {len(artifacts)} artifacts in {repo_name}")
 
     repo_details = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_artifact = {executor.submit(get_artifact_info, repo_name, artifact, headers): artifact for artifact in artifacts}
-        for future in tqdm(concurrent.futures.as_completed(future_to_artifact), total=len(artifacts), desc=f"Processing {repo_name}"):
-            try:
-                result = future.result()
-                if result:
-                    repo_details.append(result)
-            except Exception as e:
-                logging.error(f"Error processing artifact in {repo_name}: {e}")
+    for artifact in tqdm(artifacts, desc=f"Processing artifacts in {repo_name}"):
+        result = get_artifact_info(repo_name, artifact, headers)
+        if result:
+            repo_details.append(result)
 
     logging.info(f"Processed {len(repo_details)} valid artifacts in {repo_name}")
     return repo_details
 
 def save_to_csv(data, output_dir):
-    """Save data to a CSV file with the correct header order."""
     current_date = datetime.now().strftime('%Y-%m-%d')
     output_file = os.path.join(output_dir, f"EV_EOL_{current_date}.csv")
-
     headers = ['Resource_Name', 'CSP', 'Resource_Type', 'Unique_ID', 'EON_ID', 'Digest', 'Registry']
-
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    
+    os.makedirs(output_dir, exist_ok=True)
     
     with open(output_file, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=headers)
@@ -182,19 +141,19 @@ def save_to_csv(data, output_dir):
     logging.info(f"Data has been written to {output_file}")
 
 def main():
-    """Main execution function."""
     args = parse_arguments()
     headers = get_headers(args.token)
-
-    repositories = list_repositories(headers)
-    logging.info(f"Found {len(repositories)} Docker repositories")
-
+    
     all_data = []
+    
+    repositories = list_repositories(headers)
+    
     for repo in repositories:
         repo_data = process_repository(repo["key"], headers)
         all_data.extend(repo_data)
 
     save_to_csv(all_data, args.output)
+    
     logging.info("Script execution completed")
 
 if __name__ == "__main__":
@@ -202,23 +161,21 @@ if __name__ == "__main__":
     main()
 ```
 
-This script includes all the modifications we discussed:
-
-1. Enhanced logging for debugging purposes.
-2. Multiple checks for EON_ID in different locations (properties, build info, custom location).
-3. Fetching of build information when available.
-4. A placeholder function for fetching EON_ID from a custom location if needed.
-
 To use this script:
 
-1. Ensure you have all the required libraries installed (`requests`, `tqdm`).
-2. Run the script with the appropriate arguments:
+1. Save it as `script_name.py` (or any name you prefer).
+2. Make sure you have the required libraries installed (`requests`, `tqdm`).
+3. Run the script using:
+
    ```
    python script_name.py --token YOUR_ARTIFACTORY_TOKEN --output /path/to/output/directory
    ```
-3. Check the debug logs to see where (if anywhere) the EON_ID is being found.
 
-If you're still not seeing the EON_ID after running this script, the next step would be to examine the debug logs carefully to understand what data is available for each artifact. This will help determine if the EON_ID is stored in an unexpected location or format in your Artifactory setup.
+   Replace `YOUR_ARTIFACTORY_TOKEN` with your actual JFrog Artifactory API token and `/path/to/output/directory` with the directory where you want the CSV file to be saved.
+
+4. The script will process all Docker repositories in your JFrog Artifactory and create a CSV file named `EV_EOL_YYYY-MM-DD.csv` in the specified output directory.
+
+Remember to replace the `JFROG_URL` constant at the beginning of the script with your actual JFrog Artifactory URL.
 
 ---
 Answer from Perplexity: pplx.ai/share
