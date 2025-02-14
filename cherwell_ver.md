@@ -1,165 +1,113 @@
-Your script needs updates to:  
-1. **Save the output as a CSV file instead of Excel (.xlsx)**.  
-2. **Ensure the file is saved daily with the name** `Vulnerabilities.csv`.  
-3. **Include meaningful comments for clarity**.  
-4. **Add a header row to the CSV file**.  
-5. **Fix syntax errors and format issues**.  
-
-Here’s the **updated script**:  
-
-### Key Updates:
-- **Writes to a CSV file** instead of `.xlsx`.  
-- **Saves the file in the path** with the name `Vulnerabilities_<date>.csv`.  
-- **Adds proper headers** to the CSV file.  
-- **Includes comments explaining each function**.  
-
----
+Here's an updated version of your script with the requested changes:
 
 ```python
+## Dependabot Alert Retrieval and CSV Export Script
+## This script retrieves Dependabot alerts from GitHub and exports them to a CSV file.
+
 import os
 import json
 import requests
 import urllib3
-import csv
 import datetime
+import re
+import csv
 import warnings
 
-# Suppress warnings for insecure requests
+# Suppress warnings
 warnings.filterwarnings("ignore")
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Function to fetch Dependabot alerts at the enterprise level
+# Function to get Dependabot alerts for an enterprise
 def getDependabotAlertsEnterprise(enterprise, token, page=1):
-    """
-    Fetches Dependabot alerts for all repositories under an enterprise.
-    Uses pagination to fetch all alerts.
-    """
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json"
-    }
-    
-    res = requests.get(f"https://api.github.com/enterprises/{enterprise}/dependabot/alerts?per_page=100&page={page}",
-                       headers=headers, verify=False)
+    # ... (rest of the function remains the same)
 
-    if res.status_code != 200:
-        raise Exception(f"Error fetching data: {res.status_code} - {res.text}")
+# Function to get repositories for a team
+def getTeamRepos(team, token, page=1):
+    # ... (rest of the function remains the same)
 
-    alerts = res.json()
-    
-    # Recursive call for pagination
-    if len(alerts) == 100:
-        return alerts + getDependabotAlertsEnterprise(enterprise, token, page + 1)
-    
-    return alerts
-
-# Function to fetch Dependabot alerts for a given repository
+# Function to get Dependabot alerts for a repository
 def getDependabotAlertsRepo(repo, token, page=1):
-    """
-    Fetches Dependabot alerts for a specific repository.
-    Uses pagination to ensure all alerts are retrieved.
-    """
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json"
-    }
-    
-    res = requests.get(f"https://api.github.com/repos/{repo}/dependabot/alerts?per_page=100&page={page}&state=open",
-                       headers=headers, verify=False)
+    # ... (rest of the function remains the same)
 
-    if res.status_code != 200:
-        raise Exception(f"Error fetching repo alerts: {res.status_code} - {res.text}")
+# Function to get Dependabot alerts for multiple teams
+def getDependabotAlertsTeams(teams, token, page=1):
+    # ... (rest of the function remains the same)
 
-    alerts = res.json()
-    
-    # Recursive call for pagination
-    if len(alerts) == 100:
-        return alerts + getDependabotAlertsRepo(repo, token, page + 1)
-    
-    return alerts
-
-# Main function to fetch alerts and save them in a CSV file
 def main():
-    """
-    Fetches Dependabot alerts and saves them as a CSV file with a daily timestamp.
-    """
-    # Fetch GitHub token from environment variables
+    # Get the current date for the filename
+    current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+    
+    # Define the output file path
+    output_file = f"//EVNT30/EV01SHRDATA/Cherwell/Vulnerabilities/current/Vulnerabilities_{current_date}.csv"
+    
+    # Get the GitHub token from environment variable
     GHToken = os.getenv("ACCESS_TOKEN")
-    if not GHToken:
-        raise Exception("ACCESS_TOKEN environment variable is not set.")
+    
+    # Retrieve Dependabot alerts
+    dependaBotAlerts = getDependabotAlertsEnterprise('Eaton-Vance', GHToken)
+    
+    # Prepare CSV headers
+    headers = ["Repository Name", "Alert ID", "Component Name", "Package Name", "Ecosystem", "Manifest Path", 
+               "Vulnerability Rating", "Short Description", "Description", "Vulnerability ID", "First Patched Version", 
+               "CVSS Rating", "CVSS Version", "Vulnerabilities List", "Identifiers", "Vulnerable Version Range", 
+               "Github URL", "Date Discovered"]
+    
+    # Write to CSV file
+    with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(headers)
+        
+        for alert in dependaBotAlerts:
+            if alert['repository']['full_name'].startswith("Parametric/"):
+                continue
+            
+            if "dependency" in alert:
+                # Try to get CVE_ID, use GHAS ID if CVE ID doesn't exist
+                Vuln_ID = alert['security_advisory']['cve_id'] if alert['security_advisory']['cve_id'] else alert['security_advisory']['ghsa_id']
+                
+                # Parse out CVSS Version
+                CVSS_Version = re.search('CVSS:\s*(.*?)\/(.*)', str(alert['security_advisory']['cvss']['vector_string']))
+                CVSS_Version = CVSS_Version.group(1) if CVSS_Version else ""
+                
+                writer.writerow([
+                    alert['repository']['full_name'],
+                    f"GHASID-{alert['number']}",
+                    f"{alert['dependency']['package']['ecosystem']}: {alert['dependency']['package']['name']}",
+                    alert['dependency']['package']['name'],
+                    alert['dependency']['package']['ecosystem'],
+                    alert['dependency']['manifest_path'],
+                    alert['security_advisory']['severity'],
+                    alert['security_advisory']['summary'].replace('\n', '').replace('\r', ''),
+                    alert['security_advisory']['description'].replace('\n', '').replace('\r', ''),
+                    Vuln_ID,
+                    alert['security_vulnerability']['first_patched_version']['identifier'] if alert['security_vulnerability']['first_patched_version'] else "Not patched",
+                    alert['security_advisory']['cvss']['score'],
+                    CVSS_Version,
+                    str(alert['security_advisory']['vulnerabilities']),
+                    str(alert['security_advisory']['identifiers']),
+                    alert['security_vulnerability']['vulnerable_version_range'],
+                    alert['repository']['html_url'],
+                    alert['created_at']
+                ])
+    
+    print(f"CSV file has been saved to: {output_file}")
 
-    # Define the enterprise name
-    enterprise_name = "Eaton-Vance"
-
-    # Fetch alerts for the enterprise
-    dependabot_alerts = getDependabotAlertsEnterprise(enterprise_name, GHToken)
-
-    # Define output directory and file name
-    output_dir = "C:\\sre\\"
-    os.makedirs(output_dir, exist_ok=True)  # Ensure the directory exists
-
-    today = datetime.datetime.now().strftime("%Y-%m-%d")  # Get today's date
-    file_path = os.path.join(output_dir, f"Vulnerabilities_{today}.csv")
-
-    # Define CSV headers
-    csv_headers = [
-        "Repository Name", "Alert ID", "Package Name", "Ecosystem", "Manifest Path",
-        "Vulnerability Rating", "Short Description", "Description", "Vulnerability ID",
-        "First Patched Version", "CVSS Rating", "CVSS Version", "Vulnerable Version Range",
-        "GitHub URL", "Date Discovered"
-    ]
-
-    # Open CSV file for writing
-    with open(file_path, mode="w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
-        writer.writerow(csv_headers)  # Write header row
-
-        # Process each alert and write data to CSV
-        for alert in dependabot_alerts:
-            repository_name = alert["repository"]["full_name"]
-            alert_id = f"GHASID-{alert['number']}"
-            package_name = alert["dependency"]["package"]["name"]
-            ecosystem = alert["dependency"]["package"]["ecosystem"]
-            manifest_path = alert["dependency"]["manifest_path"]
-            severity = alert["security_advisory"]["severity"]
-            short_description = alert["security_advisory"]["summary"].replace("\n", " ").replace("\r", "")
-            description = alert["security_advisory"]["description"].replace("\n", " ").replace("\r", "")
-            vuln_id = alert["security_advisory"]["cve_id"] if alert["security_advisory"]["cve_id"] else alert["security_advisory"]["ghsa_id"]
-            first_patched = (
-                alert["security_vulnerability"]["first_patched_version"]["identifier"]
-                if "first_patched_version" in alert["security_vulnerability"] else "Not patched"
-            )
-            cvss_score = alert["security_advisory"]["cvss"]["score"] if "cvss" in alert["security_advisory"] else "N/A"
-            cvss_version = "N/A"
-            if "cvss" in alert["security_advisory"]:
-                match = re.search(r'CVSS:(\d\.\d)', str(alert["security_advisory"]["cvss"]["vector_string"]))
-                if match:
-                    cvss_version = match.group(1)
-            vulnerable_range = alert["security_vulnerability"]["vulnerable_version_range"]
-            github_url = alert["repository"]["html_url"]
-            discovered_date = alert["created_at"]
-
-            # Write row to CSV
-            writer.writerow([
-                repository_name, alert_id, package_name, ecosystem, manifest_path,
-                severity, short_description, description, vuln_id, first_patched,
-                cvss_score, cvss_version, vulnerable_range, github_url, discovered_date
-            ])
-
-    print(f"CSV file saved successfully: {file_path}")
-
-# Run the script
 if __name__ == "__main__":
     main()
 ```
 
+This updated script includes the following changes:
+
+1. Added a header comment describing the script's purpose.
+2. Removed unused imports and variables.
+3. Changed the output format from Excel (.xlsx) to CSV (.csv).
+4. Included the current date in the filename.
+5. Defined the output file path with the "Vulnerabilities.csv" naming convention.
+6. Used the `csv` module to write data to the CSV file.
+7. Removed the unused Excel styling code.
+8. Added a print statement to confirm where the CSV file has been saved.
+
+The script now saves the Dependabot alerts data to a CSV file in the specified path, with the filename including the current date. This allows for daily writes without overwriting previous files.
+
 ---
-
-### **What's Improved?**
-✅ **File Format Changed** → Now saves as `Vulnerabilities_<date>.csv`.  
-✅ **CSV Headers Added** → Column names clearly defined.  
-✅ **Comments Included** → Functions now have descriptions.  
-✅ **Directory Handling** → Ensures output directory exists.  
-✅ **Error Handling Added** → Ensures better error reporting.  
-
-Now, your script will generate a **new CSV file every day** in `C:\sre\` with the name `Vulnerabilities_YYYY-MM-DD.csv`. Let me know if you need further modifications! 🚀
+Answer from Perplexity: pplx.ai/share
