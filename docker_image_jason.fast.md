@@ -1,4 +1,4 @@
-Here's an updated version of the script that incorporates the current logic for retrieving the EON_ID:
+I understand. Let's modify the script to retrieve the EON_ID for all artifacts associated with a Docker image, not just the manifest.json. We'll assume that all artifacts for a given image version share the same EON_ID. Here's the updated full script:
 
 ```python
 import requests
@@ -42,28 +42,6 @@ def list_repositories(headers):
         logging.error(f"Error fetching repositories: {e}")
         return []
 
-def get_manifest_info(repo_name, image_name, tag, headers):
-    aql_query = f"""items.find(
-        {{
-            "repo": "{repo_name}",
-            "path": {{
-                "$match": "{image_name}/*"
-            }},
-            "name": "manifest.json"
-        }}
-    ).include("repo", "path", "name", "actual_sha1", "actual_md5")"""
-    
-    try:
-        response = requests.post(SEARCH_API, data=aql_query, headers=headers, verify=False)
-        response.raise_for_status()
-        results = response.json().get("results", [])
-        for result in results:
-            if tag in result.get("path", ""):
-                return result
-    except requests.RequestException as e:
-        logging.error(f"Error fetching manifest info: {e}")
-    return None
-
 def get_build_info(image_path, version, headers):
     url = f"{BUILDS_API}/{image_path}/{version}"
     try:
@@ -95,73 +73,70 @@ def get_eon_id_from_build_info(build_info):
     logging.debug(f"EON_ID not found in build info: {build_info}")
     return "N/A"
 
-def get_artifact_info(repo_name, artifact, headers):
-    path_parts = artifact.get("path", "").split('/')
-    if len(path_parts) < 2:
-        logging.warning(f"Unexpected path structure for {artifact}")
-        return None
-
-    tag = path_parts[-1]
-    image_name = '/'.join(path_parts[:-1])
-
-    manifest_info = get_manifest_info(repo_name, image_name, tag, headers)
-    if not manifest_info:
-        logging.warning(f"No manifest found for {image_name}:{tag}")
-        return None
-
-    digest = manifest_info.get("actual_sha1", "")
-    if not digest:
-        logging.warning(f"No digest found for {image_name}:{tag}")
-        return None
-
-    eon_id = "N/A"
-    build_info = get_build_info(f"{repo_name}/{image_name}", tag, headers)
-    if build_info:
-        eon_id = get_eon_id_from_build_info(build_info)
-
-    formatted_digest = f"sha256:{digest}"
-
-    return {
-        "Resource_Name": f"{image_name}:{tag}",
-        "CSP": "placeholder",
-        "Resource_Type": "Container Image",
-        "Unique_ID": formatted_digest,
-        "EON_ID": eon_id,
-        "Digest": formatted_digest,
-        "Registry": f"{repo_name}/{image_name}"
-    }
-
-def process_repository(repo_name, headers):
-    logging.info(f"Processing repository: {repo_name}")
-    
+def get_artifacts_info(repo_name, headers):
     aql_query = f"""items.find(
         {{
             "repo": "{repo_name}",
             "$or": [
                 {{"name": {{"$match": "*.tar.gz"}}}},
-                {{"name": "manifest.json"}}
+                {{"name": "manifest.json"}},
+                {{"name": {{"$match": "sha256:*"}}}}
             ]
         }}
-    ).include("repo", "path", "name")"""
+    ).include("repo", "path", "name", "actual_sha1", "actual_md5")"""
     
     try:
         response = requests.post(SEARCH_API, data=aql_query, headers=headers, verify=False)
         response.raise_for_status()
-        artifacts = response.json().get("results", [])
+        return response.json().get("results", [])
     except requests.RequestException as e:
         logging.error(f"Error fetching artifacts for {repo_name}: {e}")
         return []
 
-    logging.info(f"Found {len(artifacts)} artifacts in {repo_name}")
-
+def process_artifacts(repo_name, artifacts, headers):
     repo_details = []
-    for artifact in tqdm(artifacts, desc=f"Processing artifacts in {repo_name}"):
-        result = get_artifact_info(repo_name, artifact, headers)
-        if result:
-            repo_details.append(result)
+    eon_id_cache = {}  # Cache to store EON_IDs for each image version
 
-    logging.info(f"Processed {len(repo_details)} valid artifacts in {repo_name}")
+    for artifact in tqdm(artifacts, desc=f"Processing artifacts in {repo_name}"):
+        path_parts = artifact.get("path", "").split('/')
+        if len(path_parts) < 2:
+            continue
+
+        image_name = '/'.join(path_parts[:-1])
+        tag = path_parts[-1]
+        
+        # Use cached EON_ID if available
+        cache_key = f"{image_name}:{tag}"
+        if cache_key in eon_id_cache:
+            eon_id = eon_id_cache[cache_key]
+        else:
+            build_info = get_build_info(f"{repo_name}/{image_name}", tag, headers)
+            eon_id = get_eon_id_from_build_info(build_info)
+            eon_id_cache[cache_key] = eon_id
+
+        digest = artifact.get("actual_sha1", "")
+        if not digest:
+            continue
+
+        formatted_digest = f"sha256:{digest}"
+
+        repo_details.append({
+            "Resource_Name": f"{image_name}:{tag}",
+            "CSP": "placeholder",
+            "Resource_Type": "Container Image",
+            "Unique_ID": formatted_digest,
+            "EON_ID": eon_id,
+            "Digest": formatted_digest,
+            "Registry": f"{repo_name}/{image_name}"
+        })
+
     return repo_details
+
+def process_repository(repo_name, headers):
+    logging.info(f"Processing repository: {repo_name}")
+    artifacts = get_artifacts_info(repo_name, headers)
+    logging.info(f"Found {len(artifacts)} artifacts in {repo_name}")
+    return process_artifacts(repo_name, artifacts, headers)
 
 def save_to_csv(data, output_dir):
     current_date = datetime.now().strftime('%Y-%m-%d')
@@ -200,22 +175,11 @@ if __name__ == "__main__":
 
 This updated script includes the following changes:
 
-1. Added a new `get_manifest_info` function to retrieve manifest information for Docker images.
-2. Modified the `get_artifact_info` function to use the manifest information for retrieving the digest.
-3. Updated the `process_repository` function to use AQL (Artifactory Query Language) for searching artifacts.
-4. Enhanced the `get_eon_id_from_build_info` function to check for EON_ID in multiple locations within the build info.
+1. The `get_artifacts_info` function now retrieves all relevant artifacts, including manifest.json, *.tar.gz files, and sha256:* files.
+2. The `process_artifacts` function processes all artifacts for a given image, using a cache to store EON_IDs for each image version to avoid redundant API calls.
+3. The script now associates the same EON_ID with all artifacts of a given image version.
 
-These changes should improve the script's ability to retrieve the EON_ID for Docker images pushed to JFrog Artifactory.
-
-Citations:
-[1] https://stackoverflow.com/questions/13989033/how-to-download-the-latest-artifact-from-artifactory-repository
-[2] https://jfrog.com/help/r/jfrog-rest-apis/build-artifacts-search
-[3] https://docs.mend.io/wsk/python-with-jfrog-artifactory-host-rule-implementa
-[4] https://stackoverflow.com/questions/34732650/artifactory-rest-api-how-can-i-find-builds-for-an-artifact
-[5] https://jfrog.com/help/r/artifactory-access-loading-huge-list-of-users-into-artifactory-instance-for-test-scenarios/script
-[6] https://stackoverflow.com/questions/48315055/how-to-take-artifactory-package-builds-details-thru-api
-[7] https://github.com/jfrog/artifactory-scripts
-[8] https://jfrog.com/help/r/jfrog-rest-apis/build-info
+This should result in the EON_ID being retrieved and associated with all relevant artifacts, not just the manifest.json file. The script should now produce a more comprehensive output, including EON_IDs for all Docker image artifacts.
 
 ---
 Answer from Perplexity: pplx.ai/share
