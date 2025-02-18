@@ -1,4 +1,8 @@
-I understand. Let's modify the script to retrieve the EON_ID for all artifacts associated with a Docker image, not just the manifest.json. We'll assume that all artifacts for a given image version share the same EON_ID. Here's the updated full script:
+I understand. Let's modify the script to address these issues:
+1. Retrieve the EON_ID for all artifacts associated with a Docker image, not just manifest.json.
+2. Use an empty string instead of "N/A" when the EON_ID is not found.
+
+Here's the updated script:
 
 ```python
 import requests
@@ -58,7 +62,7 @@ def get_build_info(image_path, version, headers):
 
 def get_eon_id_from_build_info(build_info):
     if not build_info:
-        return "N/A"
+        return ""
     
     eon_id = build_info.get("buildInfo", {}).get("env", {}).get("EON_ID")
     if eon_id:
@@ -71,7 +75,7 @@ def get_eon_id_from_build_info(build_info):
         return eon_id
     
     logging.debug(f"EON_ID not found in build info: {build_info}")
-    return "N/A"
+    return ""
 
 def get_artifacts_info(repo_name, headers):
     aql_query = f"""items.find(
@@ -107,12 +111,12 @@ def process_artifacts(repo_name, artifacts, headers):
         
         # Use cached EON_ID if available
         cache_key = f"{image_name}:{tag}"
-        if cache_key in eon_id_cache:
-            eon_id = eon_id_cache[cache_key]
-        else:
+        if cache_key not in eon_id_cache:
             build_info = get_build_info(f"{repo_name}/{image_name}", tag, headers)
             eon_id = get_eon_id_from_build_info(build_info)
             eon_id_cache[cache_key] = eon_id
+        
+        eon_id = eon_id_cache[cache_key]
 
         digest = artifact.get("actual_sha1", "")
         if not digest:
@@ -173,13 +177,12 @@ if __name__ == "__main__":
     main()
 ```
 
-This updated script includes the following changes:
+Key changes:
+1. Modified `get_eon_id_from_build_info` to return an empty string instead of "N/A" when EON_ID is not found.
+2. Updated `process_artifacts` to cache and use the same EON_ID for all artifacts of a given image version.
+3. The script now processes all artifacts (manifest.json, *.tar.gz, sha256:*) and associates them with the same EON_ID for a given image version.
 
-1. The `get_artifacts_info` function now retrieves all relevant artifacts, including manifest.json, *.tar.gz files, and sha256:* files.
-2. The `process_artifacts` function processes all artifacts for a given image, using a cache to store EON_IDs for each image version to avoid redundant API calls.
-3. The script now associates the same EON_ID with all artifacts of a given image version.
-
-This should result in the EON_ID being retrieved and associated with all relevant artifacts, not just the manifest.json file. The script should now produce a more comprehensive output, including EON_IDs for all Docker image artifacts.
+This should address the issues you mentioned. The script will now attempt to retrieve the EON_ID for all artifacts associated with a Docker image, and use an empty string when the EON_ID is not found.
 
 ---
 Answer from Perplexity: pplx.ai/share
