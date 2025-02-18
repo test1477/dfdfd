@@ -1,144 +1,124 @@
-I apologize for the misunderstanding. You're right, we should process all artifacts, not just manifest.json files. Let's modify the script to handle all artifacts while still attempting to get the correct digest. Here's an updated version that should work for all artifacts:
+You're right, and that's a good observation. If the EON_ID is associated with the image as a whole, rather than individual layers, we can optimize the script to fetch the EON_ID once for each image and apply it to all related artifacts. Here's an updated version of the script that implements this logic:
 
 ```python
 import requests
 import csv
 import os
-import hashlib
-from urllib.parse import urlparse
+import logging
+import argparse
+from datetime import datetime
+from tqdm import tqdm
+from collections import defaultdict
 
-# Constants
-JFROG_URL = "https://frigate.jfrog.io"
-ARTIFACTORY_API = f"{JFROG_URL}/artifactory/api/storage"
-ARTIFACTORY_TOKEN = "your_artifactory_token_here"
+# Logging setup
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Headers for API authentication
-HEADERS = {
-    "Authorization": f"Bearer {ARTIFACTORY_TOKEN}",
-    "Accept": "application/json"
-}
+# Constants (Replace with your JFrog URL)
+JFROG_URL = "https://your-jfrog-instance/artifactory"
+ARTIFACTORY_API = f"{JFROG_URL}/api/storage"
+REPOSITORIES_API = f"{JFROG_URL}/api/repositories"
+BUILDS_API = f"{JFROG_URL}/api/build"
+SEARCH_API = f"{JFROG_URL}/api/search/aql"
+MAX_RETRIES = 3
 
-def list_repositories():
-    """Fetches all repositories in Artifactory."""
-    url = f"{JFROG_URL}/artifactory/api/repositories"
-    response = requests.get(url, headers=HEADERS, verify=False)
-    response.raise_for_status()
-    return response.json()
+# ... [keep all the existing functions] ...
 
-def list_artifacts(repo_name):
-    """Fetches all artifacts in a repository."""
-    url = f"{ARTIFACTORY_API}/{repo_name}?list&deep=1"
-    response = requests.get(url, headers=HEADERS, verify=False)
-
-    if response.status_code == 200:
-        return response.json().get("files", [])
-    else:
-        print(f"Error fetching artifacts for {repo_name}: {response.text}")
-        return []
-
-def get_artifact_digest(repo_name, artifact_path):
-    """Fetches the digest for an artifact."""
-    url = f"{ARTIFACTORY_API}/{repo_name}/{artifact_path}"
-    response = requests.get(url, headers=HEADERS, verify=False)
-    if response.status_code == 200:
-        checksums = response.json().get("checksums", {})
-        return checksums.get("sha256") or checksums.get("sha1") or checksums.get("md5")
-    return None
-
-def extract_image_info(repo_name, artifact_path):
-    """Extracts Docker image information from the artifact path."""
-    path_parts = artifact_path.split('/')
-    if len(path_parts) < 2:
-        return None, None, None
-
-    file_name = path_parts[-1]
-    tag = path_parts[-2] if len(path_parts) > 2 else "latest"
-    image_name = '/'.join(path_parts[:-2]) if len(path_parts) > 2 else path_parts[-2]
-
-    return image_name, tag, file_name
-
-def process_repository(repo_name):
-    """Processes all artifacts in a repository."""
+def process_repository(repo_name, headers):
+    logging.info(f"Processing repository: {repo_name}")
+    
+    aql_query = f"""items.find(
+        {{
+            "repo": "{repo_name}",
+            "$or": [
+                {{"name": {{"$match": "*.tar.gz"}}}},
+                {{"name": "manifest.json"}}
+            ]
+        }}
+    ).include("repo", "path", "name")"""
+    
     try:
-        artifact_list = list_artifacts(repo_name)
-        repo_details = []
-
-        for artifact in artifact_list:
-            artifact_path = artifact.get("uri", "").lstrip("/")
-
-            # Skip .jfrog cache folder
-            if ".jfrog" in artifact_path:
-                continue
-
-            image_name, tag, file_name = extract_image_info(repo_name, artifact_path)
-            if not image_name:
-                continue  # Skip if we couldn't extract the necessary information
-
-            digest = get_artifact_digest(repo_name, artifact_path)
-            if not digest:
-                continue  # Skip if we couldn't get the digest
-
-            # Store data
-            repo_details.append({
-                "Docker Image Name": f"{image_name}:{tag}",
-                "Resource Type": "Docker Image",
-                "Unique ID": f"sha256:{digest}",
-                "Digest": f"sha256:{digest}",
-                "Repo Path": f"{repo_name}/{image_name}",
-                "CSP": "placeholder"  # Add your logic to determine CSP here
-            })
-
-        return repo_details
-
-    except Exception as e:
-        print(f"Skipping repository {repo_name} due to error: {e}")
+        response = requests.post(SEARCH_API, data=aql_query, headers=headers, verify=False)
+        response.raise_for_status()
+        artifacts = response.json().get("results", [])
+    except requests.RequestException as e:
+        logging.error(f"Error fetching artifacts for {repo_name}: {e}")
         return []
 
-def save_to_csv(data, filename):
-    """Saves extracted metadata to a CSV file."""
-    headers = ['Docker Image Name', 'Resource Type', 'Unique ID', 'Digest', 'Repo Path', 'CSP']
-    
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    logging.info(f"Found {len(artifacts)} artifacts in {repo_name}")
 
-    with open(filename, mode='w', newline='', encoding='utf-8') as file:
-        writer = csv.DictWriter(file, fieldnames=headers)
-        writer.writeheader()
-        writer.writerows(data)
-    
-    print(f"Data has been written to {filename}")
+    # Group artifacts by image
+    image_artifacts = defaultdict(list)
+    for artifact in artifacts:
+        path_parts = artifact.get("path", "").split('/')
+        if len(path_parts) >= 2:
+            image_name = '/'.join(path_parts[:-1])
+            image_artifacts[image_name].append(artifact)
 
-def main():
-    """Main function to process repositories and generate the CSV report."""
-    repositories = list_repositories()
-    all_data = []
+    repo_details = []
+    for image_name, image_artifacts_list in tqdm(image_artifacts.items(), desc=f"Processing images in {repo_name}"):
+        eon_id = "N/A"
+        manifest_artifact = next((a for a in image_artifacts_list if a.get("name") == "manifest.json"), None)
+        
+        if manifest_artifact:
+            manifest_info = get_manifest_info(repo_name, image_name, manifest_artifact.get("path", "").split('/')[-1], headers)
+            if manifest_info:
+                build_info = get_build_info(f"{repo_name}/{image_name}", manifest_artifact.get("path", "").split('/')[-1], headers)
+                if build_info:
+                    eon_id = get_eon_id_from_build_info(build_info)
 
-    for repo in repositories:
-        repo_name = repo.get("key", "")
-        package_type = repo.get("packageType", "")
+        for artifact in image_artifacts_list:
+            result = get_artifact_info(repo_name, artifact, headers, eon_id)
+            if result:
+                repo_details.append(result)
 
-        # Process only Docker repositories
-        if package_type == "Docker":
-            print(f"Processing repository: {repo_name}")
-            repo_data = process_repository(repo_name)
-            all_data.extend(repo_data)
+    logging.info(f"Processed {len(repo_details)} valid artifacts in {repo_name}")
+    return repo_details
 
-    # Save data to CSV
-    save_to_csv(all_data, "c:/sre/jfrog_report.csv")
+def get_artifact_info(repo_name, artifact, headers, eon_id="N/A"):
+    path_parts = artifact.get("path", "").split('/')
+    if len(path_parts) < 2:
+        logging.warning(f"Unexpected path structure for {artifact}")
+        return None
 
-if __name__ == "__main__":
-    requests.packages.urllib3.disable_warnings()
-    main()
+    tag = path_parts[-1]
+    image_name = '/'.join(path_parts[:-1])
+
+    if artifact.get("name") == "manifest.json":
+        manifest_info = get_manifest_info(repo_name, image_name, tag, headers)
+        if not manifest_info:
+            logging.warning(f"No manifest found for {image_name}:{tag}")
+            return None
+        digest = manifest_info.get("actual_sha1", "")
+    else:
+        digest = artifact.get("actual_sha1", "")
+
+    if not digest:
+        logging.warning(f"No digest found for {image_name}:{tag}")
+        return None
+
+    formatted_digest = f"sha256:{digest}"
+
+    return {
+        "Resource_Name": f"{image_name}:{tag}",
+        "CSP": "placeholder",
+        "Resource_Type": "Container Image",
+        "Unique_ID": formatted_digest,
+        "EON_ID": eon_id,
+        "Digest": formatted_digest,
+        "Registry": f"{repo_name}/{image_name}"
+    }
+
+# ... [keep the main function and other parts unchanged] ...
 ```
 
-This updated script:
+This updated script does the following:
 
-1. Processes all artifacts in Docker repositories, not just manifest.json files.
-2. Attempts to get the digest (SHA256, SHA1, or MD5, in that order of preference) for each artifact.
-3. Extracts image name and tag information from the artifact path.
-4. Uses the artifact's digest for both the Unique ID and Digest fields.
-5. Skips artifacts that don't have a valid digest.
+1. Groups artifacts by image name in the `process_repository` function.
+2. Fetches the EON_ID once per image using the manifest.json file.
+3. Applies the same EON_ID to all artifacts (layers) belonging to that image.
+4. Processes both manifest.json and other artifacts (like layer tarballs) with the same EON_ID.
 
-This approach should provide a comprehensive list of all Docker artifacts in your JFrog Artifactory, including their correct digests. The script will attempt to use SHA256 digests when available, falling back to SHA1 or MD5 if necessary.
+This approach should ensure that all artifacts related to a single Docker image have the same EON_ID, regardless of whether they are manifest.json files or individual layer tarballs.
 
 ---
 Answer from Perplexity: pplx.ai/share
