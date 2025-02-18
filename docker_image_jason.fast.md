@@ -1,8 +1,4 @@
-I understand. Let's modify the script to address these issues:
-1. Retrieve the EON_ID for all artifacts associated with a Docker image, not just manifest.json.
-2. Use an empty string instead of "N/A" when the EON_ID is not found.
-
-Here's the updated script:
+Certainly! Here's the full updated script incorporating the changes to fetch both `manifest.json` and layer digests (`sha256:*`), along with additional debugging information:
 
 ```python
 import requests
@@ -82,9 +78,9 @@ def get_artifacts_info(repo_name, headers):
         {{
             "repo": "{repo_name}",
             "$or": [
-                {{"name": {{"$match": "*.tar.gz"}}}},
                 {{"name": "manifest.json"}},
-                {{"name": {{"$match": "sha256:*"}}}}
+                {{"name": {{"$match": "sha256*"}}}},
+                {{"name": {{"$match": "*.tar.gz"}}}}
             ]
         }}
     ).include("repo", "path", "name", "actual_sha1", "actual_md5")"""
@@ -92,7 +88,9 @@ def get_artifacts_info(repo_name, headers):
     try:
         response = requests.post(SEARCH_API, data=aql_query, headers=headers, verify=False)
         response.raise_for_status()
-        return response.json().get("results", [])
+        artifacts = response.json().get("results", [])
+        logging.debug(f"Fetched artifacts: {artifacts}")
+        return artifacts
     except requests.RequestException as e:
         logging.error(f"Error fetching artifacts for {repo_name}: {e}")
         return []
@@ -177,12 +175,27 @@ if __name__ == "__main__":
     main()
 ```
 
-Key changes:
-1. Modified `get_eon_id_from_build_info` to return an empty string instead of "N/A" when EON_ID is not found.
-2. Updated `process_artifacts` to cache and use the same EON_ID for all artifacts of a given image version.
-3. The script now processes all artifacts (manifest.json, *.tar.gz, sha256:*) and associates them with the same EON_ID for a given image version.
+This updated script includes the following key changes:
 
-This should address the issues you mentioned. The script will now attempt to retrieve the EON_ID for all artifacts associated with a Docker image, and use an empty string when the EON_ID is not found.
+1. Modified `get_artifacts_info()` function to correctly fetch both `manifest.json` and layer digests (`sha256*`).
+2. Added debug logging to print out the fetched artifacts.
+3. Ensured that the EON_ID is retrieved and associated with all artifacts of a given image version.
+4. Changed the script to use an empty string instead of "N/A" when the EON_ID is not found.
+
+To use this script:
+
+1. Save it as `jfrog_artifact_info.py` (or any preferred name).
+2. Make sure you have the required libraries installed (`requests`, `tqdm`).
+3. Replace the `JFROG_URL` constant at the top of the script with your actual JFrog Artifactory URL.
+4. Run the script using:
+
+   ```
+   python jfrog_artifact_info.py --token YOUR_ARTIFACTORY_TOKEN --output /path/to/output/directory
+   ```
+
+   Replace `YOUR_ARTIFACTORY_TOKEN` with your actual JFrog Artifactory API token and specify the desired output directory.
+
+This script should now correctly retrieve and process all relevant artifacts, including `manifest.json` and layer digests, while associating the correct EON_ID with each artifact. The debug logging will help you verify that all expected artifacts are being fetched and processed.
 
 ---
 Answer from Perplexity: pplx.ai/share
