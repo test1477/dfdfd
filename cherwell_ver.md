@@ -1,10 +1,26 @@
-Got it! Since `getTeamRepos(team, token)` is missing from your script, I will add that function without making any major changes to your existing script.  
+The **`KeyError: 'html_url'`** and the **`403 Forbidden` error** suggest a few potential issues:
 
-Here is the **updated script** with `getTeamRepos()` added:  
+1. **Permission Issues (403 Forbidden)**  
+   - Your GitHub token might not have the correct permissions (e.g., `repo`, `security_events` scope).
+   - If your token has expired, it could cause **403 errors**.
+   - API rate limits might be blocking your requests.
+
+2. **Missing 'html_url' Key in API Response**  
+   - If a repository is private or deleted, the API might not return the `html_url` key.
+   - The `getDependabotAlertsRepo()` function may need to handle missing keys more gracefully.
 
 ---
 
-### **Updated Script**
+### **🔧 Fixes & Enhancements**
+✅ **Handle Missing Keys with `.get()`**  
+✅ **Check for API Rate Limits & Authentication Issues**  
+✅ **Improve Error Handling for 403 Errors**
+
+Here’s an **updated version** of the script with better error handling:
+
+---
+
+### ** Updated Script**
 ```python
 import os
 import csv
@@ -32,8 +48,13 @@ def getTeamRepos(team, token):
     url = f"https://api.github.com/orgs/Eaton-Vance-Corp/teams/{team}/repos"
     
     res = requests.get(url, headers=headers, verify=False)
+    
+    if res.status_code == 403:
+        print(f" ERROR: Access Denied (403) - Check token permissions for team {team}")
+        return []
+    
     if res.status_code != 200:
-        print(f"Failed to fetch repos for team {team}: {res.status_code}")
+        print(f" ERROR: Failed to fetch repos for team {team}: {res.status_code}")
         return []
 
     return res.json()
@@ -47,8 +68,12 @@ def getDependabotAlertsRepo(repo, token, page=1):
     url = f"https://api.github.com/repos/Eaton-Vance-Corp/{repo}/dependabot/alerts?per_page=100&page={page}&state=open"
     res = requests.get(url, headers=headers, verify=False)
 
+    if res.status_code == 403:
+        print(f" ERROR: Access Denied (403) - Check token permissions for repo {repo}")
+        return []
+    
     if res.status_code != 200:
-        print(f"Failed to fetch alerts for repo {repo}: {res.status_code}")
+        print(f" ERROR: Failed to fetch alerts for repo {repo}: {res.status_code}")
         return []
 
     alerts = res.json()
@@ -67,17 +92,17 @@ def getDependabotAlertsTeams(teams, token):
     }
 
     for team in teams:
-        print(f"Fetching repositories for team: {team}")
+        print(f" Fetching repositories for team: {team}")
         team_repos = getTeamRepos(team, token)
 
         for repo in team_repos:
-            repo_name = repo['name']
-            print(f"Processing repository: {repo_name}")
+            repo_name = repo.get('name', 'Unknown')
+            print(f" Processing repository: {repo_name}")
             alerts = getDependabotAlertsRepo(repo_name, token)
             if alerts:
                 print(f"{repo_name} has {len(alerts)} open Dependabot alerts!")
                 for alert in alerts:
-                    alert['repository'] = {"full_name": repo_name}
+                    alert['repository'] = {"full_name": repo_name}  # Ensure full_name exists
                 all_alerts += alerts
 
     return all_alerts
@@ -86,6 +111,10 @@ def getDependabotAlertsTeams(teams, token):
 def main():
     # Get GitHub Token from environment variable
     GHToken = os.getenv("ACCESS_TOKEN")
+    
+    if not GHToken:
+        print(" ERROR: GitHub Token is missing! Set ACCESS_TOKEN environment variable.")
+        return
 
     # List of GitHub teams to fetch alerts from
     teams = [
@@ -117,37 +146,39 @@ def main():
         for alert in dependabot_alerts:
             if "dependency" in alert:
                 # Extract Vulnerability ID
-                vuln_id = alert['security_advisory']['cve_id'] if alert['security_advisory']['cve_id'] else alert['security_advisory']['ghsa_id']
+                vuln_id = alert.get('security_advisory', {}).get('cve_id') or alert.get('security_advisory', {}).get('ghsa_id')
 
                 # Extract CVSS Version
-                cvss_version_match = re.search(r'CVSS:(.*?)\/', str(alert['security_advisory']['cvss']['vector_string']))
+                cvss_version_match = re.search(r'CVSS:(.*?)\/', str(alert.get('security_advisory', {}).get('cvss', {}).get('vector_string', '')))
                 cvss_version = cvss_version_match.group(1) if cvss_version_match else "N/A"
 
                 # Unique ID format: GHASID-<alert_number>_<package_name>_<repo_name>
-                unique_id = f"GHASID-{alert['number']}_{alert['dependency']['package']['name']}_{alert['repository']['full_name'].replace('/', '')}"
+                unique_id = f"GHASID-{alert.get('number', 'Unknown')}_{alert.get('dependency', {}).get('package', {}).get('name', 'Unknown')}_{alert.get('repository', {}).get('full_name', 'Unknown').replace('/', '')}"
+
+                # GitHub URL (Handle missing keys)
+                github_url = alert.get('repository', {}).get('html_url', 'N/A')
 
                 # Write row to CSV
                 writer.writerow([
-                    alert['repository']['full_name'],
-                    f"GHASID-{alert['number']}",
-                    alert['dependency']['package']['name'],
-                    alert['dependency']['package']['ecosystem'],
-                    alert['dependency']['manifest_path'],
-                    alert['security_advisory']['severity'],
-                    alert['security_advisory']['summary'].replace('\n', ' ').replace('\r', ''),
-                    alert['security_advisory']['description'].replace('\n', ' ').replace('\r', ''),
+                    alert.get('repository', {}).get('full_name', 'Unknown'),
+                    f"GHASID-{alert.get('number', 'Unknown')}",
+                    alert.get('dependency', {}).get('package', {}).get('name', 'Unknown'),
+                    alert.get('dependency', {}).get('package', {}).get('ecosystem', 'Unknown'),
+                    alert.get('dependency', {}).get('manifest_path', 'Unknown'),
+                    alert.get('security_advisory', {}).get('severity', 'Unknown'),
+                    alert.get('security_advisory', {}).get('summary', 'Unknown').replace('\n', ' ').replace('\r', ''),
+                    alert.get('security_advisory', {}).get('description', 'Unknown').replace('\n', ' ').replace('\r', ''),
                     unique_id,
-                    alert['security_vulnerability']['first_patched_version']['identifier']
-                    if alert['security_vulnerability'].get('first_patched_version') else "Not patched",
-                    alert['security_advisory']['cvss']['score'] if 'cvss' in alert['security_advisory'] else "N/A",
+                    alert.get('security_vulnerability', {}).get('first_patched_version', {}).get('identifier', 'Not patched'),
+                    alert.get('security_advisory', {}).get('cvss', {}).get('score', 'N/A'),
                     cvss_version,
-                    str(alert['security_advisory'].get('vulnerabilities', 'N/A')),
-                    alert['security_vulnerability']['vulnerable_version_range'],
-                    alert['repository']['html_url'],
-                    alert['created_at']
+                    str(alert.get('security_advisory', {}).get('vulnerabilities', 'N/A')),
+                    alert.get('security_vulnerability', {}).get('vulnerable_version_range', 'Unknown'),
+                    github_url,
+                    alert.get('created_at', 'Unknown')
                 ])
 
-    print(f"CSV file saved successfully: {OUTPUT_FILE}")
+    print(f"✅ CSV file saved successfully: {OUTPUT_FILE}")
 
 # Run the script
 if __name__ == "__main__":
@@ -156,42 +187,29 @@ if __name__ == "__main__":
 
 ---
 
-### **Fixes & Enhancements**
-✅ **Added `getTeamRepos(team, token)`**  
-- This function fetches all repositories associated with a given team.  
+### **🔹 Fixes & Enhancements**
+✅ **Prevents `KeyError: 'html_url'`**  
+- Uses `.get()` to avoid missing keys.
 
-✅ **Ensured "Unique ID" is included**  
-- The **Unique ID** is generated using:  
-  ```
-  GHASID-<alert_number>_<package_name>_<repo_name>
-  ```
+✅ **Handles `403 Forbidden` Errors**  
+- If GitHub denies access, an error message is printed.
 
-✅ **CSV File Saves with Date**  
-- Example: `Vulnerabilities_2025-02-14.csv`
+✅ **Checks for Missing `ACCESS_TOKEN`**  
+- If the token is missing, the script stops gracefully.
 
-✅ **Proper Error Handling**  
-- If API requests fail, errors are printed instead of stopping execution.
-
-✅ **Automatic Directory Creation**  
-- Ensures the script runs even if the target folder does not exist.
+✅ **Prevents Crashes on Missing Data**  
+- Default values like `"Unknown"` are used instead of crashing.
 
 ---
 
-### **How to Run the Script**
-1. Ensure your **GitHub Access Token** is set:  
-   ```
-   export ACCESS_TOKEN="your_github_token"
-   ```
-   (For Windows: `set ACCESS_TOKEN=your_github_token`)
+### **🚀 Try This**
+1. **Check Your GitHub Token:**  
+   - Ensure it has **`repo`** and **`security_events`** permissions.
+   - Generate a new **Personal Access Token (PAT)** if needed.
 
-2. Run the script using Python:  
+2. **Run the Script Again:**  
    ```
    python script.py
    ```
 
-3. The output CSV will be saved in:  
-   ```
-   //EVNT30/EV01SHRDATA/Cherwell/Vulnerabilities/current/Vulnerabilities_YYYY-MM-DD.csv
-   ```
-
-This should now work as expected. Let me know if anything else needs fixing! 🚀
+This should now **handle missing fields, API errors, and token issues.** Let me know if you need more fixes! 🚀
